@@ -152,7 +152,8 @@ class Brand(QWidget):
         v.setSpacing(0)
         t = QLabel(APP_NAME)
         t.setStyleSheet(f"font-size:{title_px}px; font-weight:700;")
-        sub = QLabel(T("Balık otomasyonu"))
+        from core.version import VERSION
+        sub = QLabel(T("Balık otomasyonu") + f"  ·  v{VERSION}")
         sub.setStyleSheet(f"color:{theme.FAINT}; font-size:11px;")
         v.addWidget(t)
         v.addWidget(sub)
@@ -381,7 +382,8 @@ class HeroPanel(QWidget):
             v.addLayout(row)
             v.addSpacing(12)
         v.addStretch()
-        foot = QLabel("© " + APP_NAME)
+        from core.version import VERSION
+        foot = QLabel("© " + APP_NAME + f"  ·  v{VERSION}")
         foot.setStyleSheet("color:rgba(255,255,255,0.45); font-size:11px; background:transparent;")
         v.addWidget(foot)
 

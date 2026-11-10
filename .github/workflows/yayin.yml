@@ -31,7 +31,8 @@ jobs:
         run: |
           $v = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ github.event.inputs.version }}" } else { "${{ github.ref_name }}" }
           $v = $v.TrimStart("v", "V")
-          "VERSION = `"$v`"" | Out-File -Encoding utf8 core/version.py
+          python tools/surum_yaz.py $v
+          if ($LASTEXITCODE -ne 0) { throw "Surum yazilamadi" }
           "version=$v" >> $env:GITHUB_OUTPUT
 
       - name: Derle

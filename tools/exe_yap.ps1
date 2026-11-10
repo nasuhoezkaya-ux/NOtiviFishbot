@@ -7,7 +7,7 @@
 #  4) (yerel) cikti\UyeYonetimi.exe - yerel uye dosyasi icin; Supabase kullaniliyorsa gerekmez.
 # Not: pip / PyInstaller bilgi satirlarini stderr'e yazar; "Stop" olursa PowerShell 5 durur. Bu yuzden
 # "Continue" ve her adimda cikis kodu kontrol edilir.
-param([string]$Python = "", [switch]$NoOpen)
+param([string]$Python = "", [switch]$NoOpen, [string]$Version = "")
 $ErrorActionPreference = "Continue"
 $ProgressPreference = "SilentlyContinue"
 $Root = Split-Path -Parent $PSScriptRoot
@@ -34,6 +34,12 @@ if ($LASTEXITCODE -ne 0) { throw "requirements.txt kurulamadi." }
 & $Py -m pip install "pyinstaller>=6.10" --disable-pip-version-check -q
 if ($LASTEXITCODE -ne 0) { throw "PyInstaller kurulamadi." }
 Ok "Kutuphaneler hazir"
+
+# ---- surum (verildiyse core\version.py'ye yazilir)
+if ($Version) {
+    & $Py "$Root\tools\surum_yaz.py" $Version
+    if ($LASTEXITCODE -ne 0) { throw "Surum yazilamadi." }
+}
 
 # ---- 3) derleme (tek dosya)
 $Build = Join-Path $Root "build"

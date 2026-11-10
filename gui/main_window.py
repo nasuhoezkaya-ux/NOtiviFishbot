@@ -524,7 +524,8 @@ class MainWindow(QMainWindow):
         self._bar_reader = BarReader()
         self._bite_prev = BiteWatcher(cfg)
         self.bridge = Bridge()
-        self.setWindowTitle(APP_NAME)
+        from core.version import VERSION as _V
+        self.setWindowTitle(f"{APP_NAME}  v{_V}")
         self.resize(1280, 800)
         self.setMinimumSize(1100, 680)
 

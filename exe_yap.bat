@@ -7,7 +7,9 @@ echo   FishBot programi (.exe) olusturuluyor
 echo   Ilk seferde 5-10 dakika surebilir.
 echo ==================================================
 echo.
-powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\exe_yap.ps1"
+set "SURUM="
+set /p "SURUM=Surum numarasi (or. 2.0.5, bos birakirsan degismez): "
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0tools\exe_yap.ps1" -Version "%SURUM%"
 if errorlevel 1 (
   echo.
   echo [HATA] Program olusturulamadi. Bu pencerenin ekran goruntusunu gonder.

@@ -1001,4 +1001,7 @@ TABLO = {
     'Çözüm olarak kaydet': ('Save as solution', 'Als Lösung speichern'),
     'Üyenin tıkladığı yer doğru': ("Member's click is correct", 'Klick des Mitglieds ist richtig'),
     'Çözüldü işaretle': ('Mark as done', 'Als erledigt markieren'),
+    '✓ Güncelleme yapıldı: {a} → {b}': ('✓ Updated: {a} → {b}', '✓ Aktualisiert: {a} → {b}'),
+    '✓ Güncelleme yok — en son sürüm kullanılıyor ({v})': ("✓ No update — you're on the latest version ({v})", '✓ Kein Update — neueste Version ({v})'),
+    'Güncelleme denetlenemedi — sürüm {v}': ("Couldn't check for updates — version {v}", 'Update-Prüfung fehlgeschlagen — Version {v}'),
 }

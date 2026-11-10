@@ -35,7 +35,9 @@ class _Job(QObject):
             pass
         # 2) güncelleme
         self.up_to_date = False
+        self.checked = False
         self.note = ""
+        self.just_updated = self._was_updated()
         if self.repo.strip():
             kind = self._update()
             if kind != "devam":
@@ -52,9 +54,29 @@ class _Job(QObject):
                 self.finished.emit("hata")
                 return
         self.progress.emit(1.0, "")
-        self.status.emit(T("Bot güncel — sürüm {v}").format(v=VERSION) if self.up_to_date else T("Hazır"),
-                         self.note or T("Her şey hazır. Başlamak için 'Başlat'a bas."))
+        if self.just_updated:
+            head = T("✓ Güncelleme yapıldı: {a} → {b}").format(a=self.just_updated, b=VERSION)
+        elif self.up_to_date:
+            head = T("✓ Güncelleme yok — en son sürüm kullanılıyor ({v})").format(v=VERSION)
+        elif self.checked:
+            head = T("Güncelleme denetlenemedi — sürüm {v}").format(v=VERSION)
+        else:
+            head = T("Sürüm {v}").format(v=VERSION)
+        self.status.emit(head, self.note or T("Her şey hazır. Başlamak için 'Başlat'a bas."))
         self.finished.emit("hazir")
+
+    @staticmethod
+    def _was_updated() -> str:
+        """Bu açılış bir güncellemeden sonra mı? Öyleyse önceki sürüm (yoksa boş)."""
+        try:
+            from core.paths import DATA
+            DATA.mkdir(parents=True, exist_ok=True)
+            p = DATA / "son_surum.txt"
+            old = p.read_text(encoding="utf-8").strip() if p.exists() else ""
+            p.write_text(VERSION, encoding="utf-8")
+            return old if old and old != VERSION else ""
+        except Exception:
+            return ""
 
     @staticmethod
     def _server_ok(url: str, key: str) -> bool:
@@ -77,6 +99,7 @@ class _Job(QObject):
         return False
 
     def _update(self) -> str:
+        self.checked = True
         try:
             self.status.emit(T("Güncellemeler denetleniyor…"), "")
             self.progress.emit(-1.0, "")
