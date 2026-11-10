@@ -1,0 +1,51 @@
+# GitHub'a "v2.1.0" gibi bir etiket gönderince (ya da Actions > Yayin > Run workflow):
+#  Windows'ta FishBot.exe derlenir, FishBot.zip bir GitHub yayınına (Release) eklenir.
+#  Kullanıcıların botu açılışta bu yayını görür ve kendiliğinden güncellenir.
+name: Yayin
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Sürüm (ör. 2.1.0)"
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Surum numarasi
+        id: ver
+        shell: pwsh
+        run: |
+          $v = if ("${{ github.event_name }}" -eq "workflow_dispatch") { "${{ github.event.inputs.version }}" } else { "${{ github.ref_name }}" }
+          $v = $v.TrimStart("v", "V")
+          "VERSION = `"$v`"" | Out-File -Encoding utf8 core/version.py
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Derle
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path data | Out-Null
+          ./tools/exe_yap.ps1 -Python (Get-Command python).Source -NoOpen
+          if (-not (Test-Path cikti/FishBot.zip)) { throw "FishBot.zip olusmadi" }
+
+      - name: Yayinla
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.ver.outputs.version }}
+          name: FishBot ${{ steps.ver.outputs.version }}
+          generate_release_notes: true
+          files: |
+            cikti/FishBot.zip

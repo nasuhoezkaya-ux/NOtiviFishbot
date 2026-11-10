@@ -1,0 +1,8 @@
+# Captcha icin Windows'un yerlesik yazi tanimasi (istege bagli; kurulamazsa bot yine calisir)
+winrt-runtime
+winrt-Windows.Foundation
+winrt-Windows.Foundation.Collections
+winrt-Windows.Globalization
+winrt-Windows.Graphics.Imaging
+winrt-Windows.Media.Ocr
+winrt-Windows.Storage.Streams

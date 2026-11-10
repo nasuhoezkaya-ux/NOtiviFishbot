@@ -1,0 +1,24 @@
+CAPTCHA RESİMLERİ
+=================
+Sunucunun captcha'sı: "Atın üzerine tıklayın" gibi bir başlık, altında 3x3 ızgarada simgeler
+(kılıç, at, kitap, iksir, balık, kalkan ...) ve "Kalan Süre: 00:10" sayacı.
+
+pencere\  -> kalan_sure.png : captcha penceresini tanımak için hiç değişmeyen "Kalan Süre:" yazısı.
+             kalan_sure.json: pencerenin, başlığın ve ızgaranın bu resme göre yeri (değiştirme).
+             Bot boşta beklerken ~0,7 sn'de bir bu resme bakar (çok hızlı, OCR gerekmez).
+
+yazi\     -> Başlık resimleri (ör. at.png = "Atın üzerine tıklayın"). Windows yazı tanıması (OCR)
+             yoksa ne istendiği bu resimlerle anlaşılır. OCR ile çözülen her yeni başlık buraya
+             kendiliğinden eklenir.
+
+esya\     -> Izgaradaki simgeler. Dosya adı = eşyanın adı (Türkçe karaktersiz yazılabilir):
+             at.png, kilic.png, kitap.png, iksir.png, balik.png, kalkan.png
+             Aynı eşyanın birden fazla resmi olabilir: kalkan_2.png
+
+YENİ SİMGE ÖĞRETME
+------------------
+Bot bilmediği bir simge isteyen captcha görürse sesli uyarır ve bekler. Sen o captcha'yı bir kez
+ELLE çözersen bot tıkladığın simgeyi esya\ klasörüne kaydeder; bir dahakine kendisi çözer.
+(Ne istendiğini okuyabilmesi için Windows OCR kurulu olmalı ya da başlık resmi yazi\ klasöründe olmalı.)
+
+Bot captcha görünce ekran görüntüsünü data\captcha klasörüne kaydeder; resimleri oradan da kırpabilirsin.

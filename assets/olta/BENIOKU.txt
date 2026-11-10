@@ -1,0 +1,21 @@
+BALIK SİSTEMİ RESİMLERİ
+=======================
+isaret\balik_isareti.png
+    Karakterin kafasında çıkan balık işareti (konuşma balonu + olta + mavi balık). Balonun dışı saydamdır,
+    arka plan karşılaştırmaya girmez. Oyundaki boyutu ilk bulunuşta ölçülür ve ayarlara kaydedilir.
+
+    İşaret değişirse yeni bir ekran görüntüsünden sadece işareti kırpıp buraya .png olarak koyabilirsin
+    (birden fazla resim olabilir). Bot "yedek" yolla bulduğu işaretleri ogrenilen_1.png gibi adlarla
+    kendisi de ekler; yanlış bir şey öğrenildiyse o dosyayı silmen yeterli.
+
+Zamanlama penceresi (mavi çubuk, siyah balık, altın çerçeveli kutucuk) için resim GEREKMEZ:
+bot çubuğu rengiyle, kutucuğu renk tonuyla, balığı koyuluğuyla bulur. Ayarlar > Balık sistemi >
+"Pencere testi" ile kontrol edebilirsin (data\pencere_testi.png).
+
+odul\*.png
+    Ödül çarkındaki eşyaların resimleri (32x32). Dosya adı = eşyanın adı: mini_balik.png, istiridye.png,
+    yuzuk.png. Çarkta bot işaretin (▲) gösterdiği eşyayı bu resimlerle tanır, altındaki adedi rakamlardan
+    okur ve toplar (data\odul_toplam.json). Ekran görüntüsü kaydedilmez.
+
+    Tanımadığı bir eşya çıkarsa resmini bilinmeyen_1.png gibi bir adla buraya kendisi koyar (en fazla 20).
+    Dosyanın adını eşyanın adıyla değiştir (ör. deniz_kabugu.png); bot bir dahakine o adla yazar.
