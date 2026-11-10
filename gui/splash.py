@@ -8,7 +8,7 @@ from PySide6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLa
 
 from core import updater
 from core.i18n import T
-from core.version import VERSION
+from core.version import APP_NAME, VERSION
 
 from . import theme
 from .fx import BrandMark, ThinBar
@@ -25,21 +25,73 @@ class _Job(QObject):
         self.cancelled = False
 
     def run(self) -> None:
+        # 1) dosyalar
+        self.status.emit(T("Dosyalar hazırlanıyor…"), "")
+        try:
+            from core.paths import cleanup_old_exe, sync_assets
+            cleanup_old_exe()
+            sync_assets()
+        except Exception:
+            pass
+        # 2) güncelleme
+        self.up_to_date = False
+        self.note = ""
+        if self.repo.strip():
+            kind = self._update()
+            if kind != "devam":
+                self.finished.emit(kind)
+                return
+        # 3) üyelik sunucusu
+        from core import server
+        if server.supabase_ready():
+            self.status.emit(T("Sunucu bağlantısı denetleniyor…"), "")
+            self.progress.emit(-1.0, "")
+            if not self._server_ok(server.SUPABASE_URL, server.SUPABASE_ANON_KEY):
+                self.status.emit(T("Sunucuya bağlanılamadı"),
+                                 T("İnternet bağlantını kontrol et, sonra 'Tekrar dene'ye bas."))
+                self.finished.emit("hata")
+                return
+        self.progress.emit(1.0, "")
+        self.status.emit(T("Bot güncel — sürüm {v}").format(v=VERSION) if self.up_to_date else T("Hazır"),
+                         self.note or T("Her şey hazır. Başlamak için 'Başlat'a bas."))
+        self.finished.emit("hazir")
+
+    @staticmethod
+    def _server_ok(url: str, key: str) -> bool:
+        """Üyelik sunucusu cevap veriyor mu? (geçersiz bir oturumla fb_verify çağrılır: cevap gelirse bağlantı var)"""
+        import json
+        import urllib.error
+        import urllib.request
+        from core.auth import SupabaseAuthProvider
+        h = SupabaseAuthProvider(url, key)._headers()
+        req = urllib.request.Request(url.rstrip("/") + "/rest/v1/rpc/fb_verify", method="POST", headers=h,
+                                     data=json.dumps({"p_token": "00000000-0000-0000-0000-000000000000"}).encode())
+        for _ in range(2):
+            try:
+                with urllib.request.urlopen(req, timeout=8):
+                    return True
+            except urllib.error.HTTPError:
+                return True                          # sunucu cevap verdi (hata koduyla da olsa)
+            except Exception:
+                time.sleep(1.0)
+        return False
+
+    def _update(self) -> str:
         try:
             self.status.emit(T("Güncellemeler denetleniyor…"), "")
+            self.progress.emit(-1.0, "")
             rel = updater.check(self.repo)
         except Exception:
-            self.finished.emit("devam")            # internet yoksa / GitHub cevap vermezse normal açıl
-            return
+            self.note = T("Güncelleme denetlenemedi (GitHub'a ulaşılamadı).")
+            return "devam"                           # GitHub cevap vermezse normal açıl
         if rel is None:
-            self.finished.emit("devam")
-            return
+            self.up_to_date = True
+            return "devam"
         if not updater.is_frozen():
             self.status.emit(T("Yeni sürüm var: {v}").format(v=rel.version),
                              T("Kaynak koddan çalışıyor — güncellemeyi GitHub'dan indir."))
             time.sleep(2.5)
-            self.finished.emit("devam")
-            return
+            return "devam"
         self.status.emit(T("Bot güncelleniyor…"), T("Sürüm {a} → {b}").format(a=VERSION, b=rel.version))
         t0 = [time.time(), 0]
 
@@ -54,15 +106,15 @@ class _Job(QObject):
             self.progress.emit(done / total if total else 0.0, txt)
 
         try:
-            z = updater.download(rel, prog, cancel=lambda: self.cancelled)
+            path = updater.download(rel, prog, cancel=lambda: self.cancelled)
             self.status.emit(T("Güncelleme kuruluyor…"), T("Bot birazdan yeniden açılacak."))
             self.progress.emit(1.0, "")
-            updater.install(z)
-            self.finished.emit("kur")
+            updater.install(path)
+            return "kur"
         except Exception as e:  # noqa: BLE001
             self.status.emit(T("Güncelleme yapılamadı"), str(e)[:160])
             time.sleep(2.5)
-            self.finished.emit("devam")
+            return "devam"
 
 
 class SplashScreen(QDialog):
@@ -71,7 +123,7 @@ class SplashScreen(QDialog):
     def __init__(self, repo: str):
         super().__init__()
         self.result_kind = "devam"
-        self.setWindowTitle("FishBot")
+        self.setWindowTitle(APP_NAME)
         self.setWindowFlags(Qt.FramelessWindowHint | Qt.Dialog)
         self.setFixedSize(460, 280)
         self.setObjectName("splash")
@@ -85,7 +137,7 @@ class SplashScreen(QDialog):
         top.addWidget(BrandMark(46))
         col = QVBoxLayout()
         col.setSpacing(2)
-        t = QLabel("FishBot")
+        t = QLabel(APP_NAME)
         t.setStyleSheet("font-size:22px; font-weight:700;")
         ver = QLabel(T("Sürüm {v}").format(v=VERSION))
         ver.setObjectName("faint")
@@ -115,6 +167,22 @@ class SplashScreen(QDialog):
         self.skip.setVisible(False)
         self.skip.clicked.connect(self._skip)
         row.addWidget(self.skip)
+        self.start = QPushButton(T("▶  Başlat"))
+        self.start.setObjectName("primary")
+        self.start.setMinimumWidth(130)
+        self.start.setVisible(False)
+        self.start.setDefault(True)
+        self.start.clicked.connect(self._go)
+        self.retry = QPushButton(T("Tekrar dene"))
+        self.retry.setObjectName("primary")
+        self.retry.setVisible(False)
+        self.retry.clicked.connect(self._retry)
+        self.close_btn = QPushButton(T("Kapat"))
+        self.close_btn.setVisible(False)
+        self.close_btn.clicked.connect(self._close)
+        row.addWidget(self.close_btn)
+        row.addWidget(self.retry)
+        row.addWidget(self.start)
         v.addLayout(row)
 
         self._spin = 0.0
@@ -123,8 +191,12 @@ class SplashScreen(QDialog):
         self._busy.start(30)
         self._indeterminate = True
 
+        self.repo = repo
+        self._start_job()
+
+    def _start_job(self) -> None:
         self._thread = QThread(self)
-        self._job = _Job(repo)
+        self._job = _Job(self.repo)
         self._job.moveToThread(self._thread)
         self._thread.started.connect(self._job.run)
         self._job.status.connect(self._on_status)
@@ -142,6 +214,11 @@ class SplashScreen(QDialog):
         self.detail.setText(d)
 
     def _on_progress(self, f: float, txt: str) -> None:
+        if f < 0:
+            self._indeterminate = True
+            self.mb.setText("")
+            self.skip.setVisible(False)
+            return
         self._indeterminate = False
         self.bar.set(f, theme.ACCENT)
         self.mb.setText(txt)
@@ -151,7 +228,35 @@ class SplashScreen(QDialog):
         self._job.cancelled = True
 
     def _done(self, kind: str) -> None:
-        self.result_kind = kind
         self._thread.quit()
         self._thread.wait(2000)
+        if kind == "hata":                       # sorun var: giriş ekranına geçme, tekrar denet
+            self._indeterminate = False
+            self.bar.set(1.0, theme.DANGER)
+            self.retry.setVisible(True)
+            self.close_btn.setVisible(True)
+            return
+        if kind == "hazir":                      # her şey yolunda: kullanıcı "Başlat"a basınca giriş ekranı
+            self._indeterminate = False
+            self.bar.set(1.0, theme.SUCCESS)
+            self.skip.setVisible(False)
+            self.start.setVisible(True)
+            self.close_btn.setVisible(True)
+            self.start.setFocus()
+            return
+        self.result_kind = kind
         self.accept()
+
+    def _go(self) -> None:
+        self.result_kind = "devam"
+        self.accept()
+
+    def _retry(self) -> None:
+        self.start.setVisible(False)
+        self.retry.setVisible(False)
+        self.close_btn.setVisible(False)
+        self._start_job()
+
+    def _close(self) -> None:
+        self.result_kind = "kapat"
+        self.reject()

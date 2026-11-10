@@ -7,9 +7,11 @@ import sys
 import traceback
 from datetime import datetime
 
-BASE = os.path.dirname(os.path.abspath(sys.executable if getattr(sys, "frozen", False) else __file__))
+BASE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, BASE)
-LOG_PATH = os.path.join(BASE, "data", "hata.log")
+from core.paths import BUNDLE, DATA  # noqa: E402
+
+LOG_PATH = os.path.join(str(DATA), "hata.log")
 
 
 def write_log(text: str) -> None:
@@ -25,7 +27,7 @@ def show_error(text: str) -> None:
         app = QApplication.instance() or QApplication(sys.argv)  # noqa: F841
         box = QMessageBox()
         box.setIcon(QMessageBox.Critical)
-        box.setWindowTitle("FishBot — Hata")
+        box.setWindowTitle("NOtivi Fishbot — Hata")
         try:
             from core.i18n import T
         except Exception:
@@ -64,17 +66,17 @@ def main() -> int:
         from gui.theme import QSS
     except ImportError as e:
         msg = (f"Gerekli bir paket eksik: {e}\n\n"
-               "baslat.bat dosyasını çalıştır; paketleri otomatik kurar.")
+               "Programı yeniden indir ya da baslat.bat dosyasını çalıştır.")
         write_log(traceback.format_exc())
         print(msg, file=sys.stderr)
         show_error(msg)
         return 1
 
     app = QApplication(sys.argv)
-    app.setApplicationName("FishBot")
+    app.setApplicationName("NOtivi Fishbot")
     app.setStyle("Fusion")
     app.setStyleSheet(QSS)
-    ico = os.path.join(BASE, "assets", "app.ico")
+    ico = os.path.join(str(BUNDLE), "assets", "app.ico")
     if os.path.exists(ico):
         from PySide6.QtGui import QIcon
         app.setWindowIcon(QIcon(ico))
@@ -85,14 +87,20 @@ def main() -> int:
         except Exception:
             pass
 
-    # açılış ekranı: güncelleme varsa indirip kurar (arayüz dilinde, anlık MB)
+    # exe'nin açılırken gösterdiği resmi kapat (artık bizim açılış ekranımız var)
+    try:
+        import pyi_splash   # noqa: F401  (sadece exe'de vardır)
+        pyi_splash.close()
+    except Exception:
+        pass
+
+    # açılış ekranı: dosyalar, güncelleme, sunucu bağlantısı. Sorun yoksa giriş ekranına geçer.
     from core import server
-    if server.UPDATE_REPO.strip():
-        from gui.splash import SplashScreen
-        sp = SplashScreen(server.UPDATE_REPO)
-        sp.exec()
-        if sp.result_kind == "kur":
-            return 0                        # güncelleyici programı yeniden açacak
+    from gui.splash import SplashScreen
+    sp = SplashScreen(server.UPDATE_REPO)
+    sp.exec()
+    if sp.result_kind != "devam":
+        return 0                            # "kur": yeni sürüm kendini açacak; "kapat": kullanıcı kapattı
 
     # üyelik: core/server.py'de Supabase ayarlıysa Supabase, değilse data/users.json
     provider = make_provider()

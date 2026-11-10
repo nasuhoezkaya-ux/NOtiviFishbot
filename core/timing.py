@@ -34,8 +34,10 @@ def precise_sleep(dt: float) -> None:
         left = end - time.perf_counter()
         if left <= 0:
             return
-        if left > 0.004:
-            time.sleep(left - 0.003)
+        if left > 0.0015:
+            time.sleep(left - 0.001)       # Python 3.11+ Windows'ta ~1 ms hassas
+        else:
+            time.sleep(0)                  # son milisaniye: diğer client'ların iş parçacıklarına da yer ver
 
 
 # ====================================================================== zamanlama çubuğu
@@ -400,6 +402,7 @@ class TimingController:
         self._xprev: float | None = None
         self._pre: tuple[float, float, float] | None = None      # basış anındaki (hız, zaman, konum)
         self.why = ""
+        self.eta = None                   # basışa kalan tahmini süre (sn) — çoklu client için
         self.how = ""                     # kutucuk nasıl bulundu: "cerceve" / "renk"
         self._moved: list[tuple[float, float]] = []
         self.moves = 0                    # kutucuk tur içinde yer değiştirdi mi (kaç kez)
@@ -485,6 +488,7 @@ class TimingController:
 
         Erken basmayı önleyen koşullar: kutucuk sabitlenmiş olmalı, pencere en az WARMUP süredir izleniyor
         olmalı, balık hareket etmeye başlamış (yol almış ve hızı ölçülebilir) ve ortaya DOĞRU geliyor olmalı."""
+        self.eta = None
         box = self.locked
         vel = self.tr.velocity(window=0.15)
         if box is None:
@@ -510,6 +514,7 @@ class TimingController:
         if t_c is None:
             return None
         wait = t_c - self.lat - now
+        self.eta = wait                                    # basışa kalan tahmini süre (çoklu client planlaması)
         dt = self.frame_dt()
         if wait > dt * 1.3:
             return None                                    # bir sonraki karede de yetişiriz

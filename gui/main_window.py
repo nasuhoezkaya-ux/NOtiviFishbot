@@ -19,12 +19,16 @@ from core.timing import BarReader, BiteWatcher, draw_bar, draw_bite
 from core.winapi import (INPUT_METHODS, KEY_NAMES, GameWindow, WindowCapture, key_down, list_game_windows,
                          make_input, window_alive, window_under_cursor)
 
+from core.version import APP_NAME
 from . import theme
 from .help import H, help_label, tip
 from .captcha_page import CaptchaPage
 from .dashboard import DashboardPage
 from .fx import AccountCard, Brand, NavButton
 from .widgets import Card, StatusDot
+
+
+MAX_CLIENTS = 4      # aynı anda en fazla bu kadar client (zamanlama basışları çakışmasın diye)
 
 
 class Bridge(QObject):
@@ -520,7 +524,7 @@ class MainWindow(QMainWindow):
         self._bar_reader = BarReader()
         self._bite_prev = BiteWatcher(cfg)
         self.bridge = Bridge()
-        self.setWindowTitle("FishBot")
+        self.setWindowTitle(APP_NAME)
         self.resize(1280, 800)
         self.setMinimumSize(1100, 680)
 
@@ -547,19 +551,21 @@ class MainWindow(QMainWindow):
 
         self.stack = QStackedWidget()
         self.dashboard = DashboardPage(self)
-        self.captcha_page = CaptchaPage(self)
+        self.captcha_page = CaptchaPage(self) if session.is_admin else None     # sadece yönetici
         self.settings = SettingsPage(self)
         self.logs = LogPage()
         pages = [("clients", T("Client'lar"), self.dashboard,
                   tip(T("Client'lar"), T("Açık oyun pencereleri. Bir client'a tıkla: canlı görüntü, istatistik, "
                                        "turlar ve Başlat/Durdur. F7 ile fare altındaki pencereyi seçebilirsin."))),
-                 ("captcha", T("Captcha"), self.captcha_page,
-                  tip(T("Captcha"), T("Captcha ayarları, test, öğrenilen simgeler ve yakalanan captcha resimleri."))),
                  ("settings", T("Ayarlar"), self.settings,
                   tip(T("Ayarlar"), T("Balık sistemi, işaret alanı, tuş ve client ayarları — hepsi açıklamalı."))),
                  ("logs", T("Kayıtlar"), self.logs,
                   tip(T("Kayıtlar"), T("Botun olay günlüğü: atılan oltalar, isabetler, uyarılar.")))]
         if session.is_admin:
+            pages.insert(1, ("captcha", T("Captcha"), self.captcha_page,
+                             tip(T("Captcha"), T("Captcha ayarları, test, öğrenilen simgeler ve yakalanan captcha "
+                                                 "resimleri. Yeni simgeleri sadece yönetici öğretir; üyelere "
+                                                 "güncellemeyle gider."))))
             from .members_page import MembersPage
             self.members_page = MembersPage(self)
             pages.append(("members", T("Üyeler"), self.members_page,
@@ -609,7 +615,8 @@ class MainWindow(QMainWindow):
 
         self.timer = QTimer(self)
         self.timer.timeout.connect(self.dashboard.tick)
-        self.timer.timeout.connect(self.captcha_page.tick)
+        if self.captcha_page is not None:
+            self.timer.timeout.connect(self.captcha_page.tick)
         self.timer.start(1000)
         self.vip_timer = QTimer(self)
         self.vip_timer.timeout.connect(self._update_vip)
@@ -642,11 +649,11 @@ class MainWindow(QMainWindow):
         if getattr(self, "_vip_ok", True) is False:
             self._vip_ok = True
             self.stop_all()
-            QMessageBox.warning(self, T("FishBot"), T("Üyelik doğrulanamadı, bot durduruluyor."))
+            QMessageBox.warning(self, APP_NAME, T("Üyelik doğrulanamadı, bot durduruluyor."))
             return
         if not self.session.is_valid:
             self.stop_all()
-            QMessageBox.warning(self, T("FishBot"), T("Üyeliğinin süresi doldu. Botlar durduruldu."))
+            QMessageBox.warning(self, APP_NAME, T("Üyeliğinin süresi doldu. Botlar durduruldu."))
 
     def _on_scan(self, pid: int, line: str) -> None:
         self.dashboard.on_scan(pid, line)
@@ -758,17 +765,21 @@ class MainWindow(QMainWindow):
         line = f"{datetime.now():%H:%M:%S}  {tag:<9} {msg}"
         self.logs.add(line)
         if "aptcha" in msg or "CAPTCHA" in msg:
-            self.captcha_page.add_event(line)
+            if self.captcha_page is not None:
+                self.captcha_page.add_event(line)
 
     def start_bot(self, game: GameWindow) -> None:
         w = self.workers.get(game.pid)
         if w and w.is_alive():
             return
-        lim = int(self.session.max_clients or 0)
+        member_lim = int(self.session.max_clients or 0)
+        lim = min(MAX_CLIENTS, member_lim) if member_lim else MAX_CLIENTS
         running = sum(1 for x in self.workers.values() if x.is_alive() and not x.stop_event.is_set())
-        if lim and running >= lim:
-            QMessageBox.information(self, T("FishBot"),
-                                    T("Üyeliğin aynı anda en fazla {n} client'a izin veriyor.").format(n=lim))
+        if running >= lim:
+            QMessageBox.information(self, APP_NAME,
+                                    T("Üyeliğin aynı anda en fazla {n} client'a izin veriyor.").format(n=lim)
+                                    if member_lim and member_lim < MAX_CLIENTS else
+                                    T("Bot aynı anda en fazla {n} client çalıştırır.").format(n=MAX_CLIENTS))
             return
         w = BotWorker(game, self.cfg,
                       on_log=self.bridge.log.emit,
@@ -778,7 +789,8 @@ class MainWindow(QMainWindow):
                       on_frame=self.bridge.frame.emit,
                       want_frames=lambda pid: pid == self.preview_pid,
                       on_round=self.bridge.round.emit,
-                      on_scan=self.bridge.scan.emit)
+                      on_scan=self.bridge.scan.emit,
+                      admin=self.session.is_admin)
         self.workers[game.pid] = w
         w.start()
         self.dashboard.set_state(game.pid, "Çalışıyor")
@@ -799,7 +811,7 @@ class MainWindow(QMainWindow):
         msg = T("Dil değişti. Arayüzün tamamının yeni dilde görünmesi için program yeniden açılsın mı?")
         if n:
             msg += "\n" + T("Çalışan {n} bot durdurulacak.").format(n=n)
-        if QMessageBox.question(self, "FishBot", msg) != QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, APP_NAME, msg) != QMessageBox.StandardButton.Yes:
             return
         import sys
         from PySide6.QtCore import QProcess
@@ -807,6 +819,11 @@ class MainWindow(QMainWindow):
         self.stop_all()
         for w in self.workers.values():
             w.join(timeout=2)
+        from core.paths import restart_env
+        os_env = restart_env()
+        import os as _os
+        _os.environ.clear()
+        _os.environ.update(os_env)
         if getattr(sys, "frozen", False):
             QProcess.startDetached(sys.executable, [])
         else:

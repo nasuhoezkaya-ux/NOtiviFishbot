@@ -185,6 +185,9 @@ H = {
                         "değişmiyorsa kontrol kendiliğinden kapanır.")),
     "captcha_keep": tip(T("Saklanacak captcha resmi"),
                         T("Yakalanan captcha ekran görüntülerinden en yenileri tutulur, eskileri silinir (disk dolmasın).")),
+    "b_tile": tip(T("Pencereleri diz"),
+                  T("Client pencerelerini (en fazla 4) ekrana 2x2 dizer, boyutlarına dokunmaz. Pencereler üst üste "
+                  "binmezse her bot kendi çubuğunu ekrandan çok hızlı okur; birbirini örtmez.")),
     "summary": tip(T("Özet"),
                    T("Botun gerçekten saydığı değerler. 'Seri sayacıyla doğrulanan': sonucu oyunun Seri sayısıyla "
                    "kontrol edilen tur sayısı. 'Düzeltilen': botun ölçümü Seri sayısıyla çeliştiği için düzeltilen "

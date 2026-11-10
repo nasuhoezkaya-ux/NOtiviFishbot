@@ -12,6 +12,7 @@ from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLay
 
 from core.i18n import T
 
+from core.version import APP_NAME
 from . import theme
 
 
@@ -149,7 +150,7 @@ class Brand(QWidget):
         h.addWidget(BrandMark(mark))
         v = QVBoxLayout()
         v.setSpacing(0)
-        t = QLabel("FishBot")
+        t = QLabel(APP_NAME)
         t.setStyleSheet(f"font-size:{title_px}px; font-weight:700;")
         sub = QLabel(T("Balık otomasyonu"))
         sub.setStyleSheet(f"color:{theme.FAINT}; font-size:11px;")
@@ -355,7 +356,7 @@ class HeroPanel(QWidget):
         v.setSpacing(0)
         v.addWidget(BrandMark(52), 0, Qt.AlignLeft)
         v.addSpacing(26)
-        t = QLabel("FishBot")
+        t = QLabel(APP_NAME)
         t.setStyleSheet("font-size:30px; font-weight:700; color:white; background:transparent;")
         v.addWidget(t)
         v.addSpacing(6)
@@ -380,7 +381,7 @@ class HeroPanel(QWidget):
             v.addLayout(row)
             v.addSpacing(12)
         v.addStretch()
-        foot = QLabel("© FishBot")
+        foot = QLabel("© " + APP_NAME)
         foot.setStyleSheet("color:rgba(255,255,255,0.45); font-size:11px; background:transparent;")
         v.addWidget(foot)
 

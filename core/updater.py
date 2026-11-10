@@ -53,18 +53,21 @@ def check(repo: str, timeout: float = 8.0) -> Release | None:
     tag = d.get("tag_name") or ""
     if _ver(tag) <= _ver(VERSION):
         return None
-    for a in d.get("assets") or []:
-        n = (a.get("name") or "").lower()
-        if n.endswith(".zip") and "fishbot" in n:
-            return Release(version=tag.lstrip("vV"), url=a["browser_download_url"], size=int(a.get("size") or 0),
-                           notes=d.get("body") or "")
+    assets = d.get("assets") or []
+    # tek dosya sürüm: FishBot.exe (yoksa eski klasör sürümü için FishBot*.zip)
+    for want in (lambda n: n == "fishbot.exe", lambda n: n.endswith(".zip") and "fishbot" in n):
+        for a in assets:
+            n = (a.get("name") or "").lower()
+            if want(n):
+                return Release(version=tag.lstrip("vV"), url=a["browser_download_url"],
+                               size=int(a.get("size") or 0), notes=d.get("body") or "")
     return None
 
 
 def download(rel: Release, progress: Callable[[int, int], None], cancel=lambda: False) -> Path:
     """Zip'i geçici klasöre indir. progress(indirilen_bayt, toplam_bayt)."""
     tmp = Path(tempfile.mkdtemp(prefix="fishbot_update_"))
-    dest = tmp / "update.zip"
+    dest = tmp / ("FishBot.exe" if rel.url.lower().endswith(".exe") else "update.zip")
     req = urllib.request.Request(rel.url, headers={"User-Agent": UA["User-Agent"]})
     with urllib.request.urlopen(req, timeout=30) as r, open(dest, "wb") as f:
         total = int(r.headers.get("Content-Length") or rel.size or 0)
@@ -81,8 +84,39 @@ def download(rel: Release, progress: Callable[[int, int], None], cancel=lambda: 
     return dest
 
 
-def install(zip_path: Path) -> None:
-    """Zip'i aç ve program kapanınca kopyalayıp yeniden açacak .bat'ı başlat. Sonra program kapanmalı."""
+def install(path: Path) -> None:
+    """İndirilen yeni sürümü yerleştir ve yeni programı başlat. Sonra bu program kapanmalı."""
+    if path.suffix.lower() == ".exe":
+        install_exe(path)
+    else:
+        install_zip(path)
+
+
+def install_exe(new_exe: Path) -> None:
+    """Tek dosya sürüm: çalışan FishBot.exe'nin adı değiştirilir (Windows buna izin verir), yenisi yerine
+    konur ve açılır. Eski dosya bir sonraki açılışta silinir."""
+    import shutil
+    from .paths import EXE, restart_env
+    if EXE is None:
+        raise RuntimeError("Güncelleme sadece exe sürümünde kurulur.")
+    old = EXE.with_name(EXE.stem + ".old.exe")
+    try:
+        if old.exists():
+            old.unlink()
+    except OSError:
+        old = EXE.with_name(f"{EXE.stem}.{os.getpid()}.old.exe")
+    os.replace(EXE, old)
+    try:
+        shutil.move(str(new_exe), str(EXE))
+    except Exception:
+        os.replace(old, EXE)                    # geri al
+        raise
+    subprocess.Popen([str(EXE)], env=restart_env(), close_fds=True,
+                     creationflags=0x00000008 | 0x00000200)   # DETACHED_PROCESS | NEW_PROCESS_GROUP
+
+
+def install_zip(zip_path: Path) -> None:
+    """Klasör sürüm: zip'i aç ve program kapanınca kopyalayıp yeniden açacak .bat'ı başlat."""
     work = zip_path.parent
     src = work / "yeni"
     with zipfile.ZipFile(zip_path) as z:
@@ -91,6 +125,8 @@ def install(zip_path: Path) -> None:
     root = next((p.parent for p in src.rglob("FishBot.exe")), None)
     if root is None:
         raise RuntimeError("Güncelleme paketinde FishBot.exe yok.")
+    from .paths import EXE
+    target = EXE.parent if EXE is not None else APP_DIR
     bat = work / "guncelle.bat"
     pid = os.getpid()
     bat.write_text(
@@ -98,8 +134,8 @@ def install(zip_path: Path) -> None:
         "chcp 65001 >nul\r\n"
         ":bekle\r\n"
         f'tasklist /FI "PID eq {pid}" 2>nul | find "{pid}" >nul && (timeout /t 1 /nobreak >nul & goto bekle)\r\n'
-        f'robocopy "{root}" "{APP_DIR}" /E /R:3 /W:1 /XD "{root / "data"}" /NFL /NDL /NJH /NJS /NP >nul\r\n'
-        f'start "" "{APP_DIR / "FishBot.exe"}"\r\n'
+        f'robocopy "{root}" "{target}" /E /R:3 /W:1 /XD "{root / "data"}" /NFL /NDL /NJH /NJS /NP >nul\r\n'
+        f'start "" "{target / "FishBot.exe"}"\r\n'
         f'rmdir /s /q "{src}" >nul 2>nul\r\n'
         f'del "{zip_path}" >nul 2>nul\r\n'
         '(goto) 2>nul & del "%~f0"\r\n', encoding="utf-8")

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (QCheckBox, QDialog, QHBoxLayout, QLabel, QLineEdi
 from core.auth import AuthError, AuthProvider, Session
 from core.config import DATA_DIR
 
+from core.version import APP_NAME
 from . import theme
 from .fx import HeroPanel
 
@@ -41,7 +42,7 @@ class LoginWindow(QDialog):
         self.provider = provider
         self.session: Session | None = None
         self._thread: QThread | None = None
-        self.setWindowTitle(T("FishBot • Giriş"))
+        self.setWindowTitle(APP_NAME + " • " + T("Giriş"))
         self.setObjectName("root")
         self.setFixedSize(860, 540)
 

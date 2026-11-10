@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QInp
 from core.i18n import T
 from core.paths import DATA
 
+from core.version import APP_NAME
 from . import theme
 from .dashboard import button, card_with_title, page_header
 from .help import H
@@ -153,7 +154,8 @@ class CaptchaPage(QScrollArea):
         iv.addWidget(self.icons, 1)
         brow = QHBoxLayout()
         for text, fn in (("Yeniden adlandır", self._rename_icon), ("Sil", self._delete_icon),
-                         ("Klasörü aç", self._open_icons), ("Yenile", self.reload_icons)):
+                         ("Klasörü aç", self._open_icons), ("Yenile", self.reload_icons),
+                         ("Depoya aktar…", self._export)):
             b = button(text, "ghost")
             b.clicked.connect(fn)
             brow.addWidget(b)
@@ -273,7 +275,7 @@ class CaptchaPage(QScrollArea):
         p = self._sel_icon()
         if p is None:
             return
-        if QMessageBox.question(self, "FishBot", T("“{0}” simgesi silinsin mi?").format(p.stem)) != \
+        if QMessageBox.question(self, APP_NAME, T("“{0}” simgesi silinsin mi?").format(p.stem)) != \
                 QMessageBox.StandardButton.Yes:
             return
         p.unlink(missing_ok=True)
@@ -283,6 +285,35 @@ class CaptchaPage(QScrollArea):
     def _open_icons(self) -> None:
         from core.captcha import ITEM_DIR
         _open(ITEM_DIR)
+
+    def _export(self) -> None:
+        """Öğrenilen captcha resimlerini GitHub deposunun klasörüne kopyala: commit + yayın sonrası bütün
+        üyelere güncellemeyle gider."""
+        import shutil
+        from PySide6.QtWidgets import QFileDialog
+        from core.paths import ASSETS, FROZEN
+        if not FROZEN:
+            QMessageBox.information(self, APP_NAME, T("Bot kaynak koddan çalışıyor: öğrenilen resimler zaten "
+                                                     "projenin assets\\captcha klasöründe. GitHub Desktop'ta "
+                                                     "Commit + Push yap, sonra yeni sürüm yayınla."))
+            return
+        d = QFileDialog.getExistingDirectory(self, T("GitHub deposunun klasörünü seç (içinde main.py olan)"))
+        if not d:
+            return
+        dst = Path(d) / "assets" / "captcha"
+        if not (Path(d) / "main.py").exists():
+            QMessageBox.warning(self, APP_NAME, T("Bu klasörde main.py yok — deponun ana klasörünü seç."))
+            return
+        n = 0
+        src = ASSETS / "captcha"
+        for f in src.rglob("*.png"):
+            t = dst / f.relative_to(src)
+            t.parent.mkdir(parents=True, exist_ok=True)
+            if not t.exists() or t.read_bytes() != f.read_bytes():
+                shutil.copy2(f, t)
+                n += 1
+        QMessageBox.information(self, APP_NAME, T("{n} resim depoya kopyalandı. GitHub Desktop'ta Commit + Push "
+                                                  "yap, sonra yeni sürüm yayınla: üyelere güncellemeyle gider.").format(n=n))
 
     # ------------------------------------------------------------ yakalanan resimler
     def reload_shots(self) -> None:
@@ -313,7 +344,7 @@ class CaptchaPage(QScrollArea):
         self.shot_img.setPixmap(pm.scaled(self.shot_img.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation))
 
     def _clear_shots(self) -> None:
-        if QMessageBox.question(self, "FishBot", T("Yakalanan bütün captcha resimleri silinsin mi?")) != \
+        if QMessageBox.question(self, APP_NAME, T("Yakalanan bütün captcha resimleri silinsin mi?")) != \
                 QMessageBox.StandardButton.Yes:
             return
         for p in SHOT_DIR.glob("*.png"):

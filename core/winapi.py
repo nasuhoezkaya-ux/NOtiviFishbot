@@ -598,12 +598,24 @@ class _FairLock:
         self._owner = None
         self._queue: list = []
         self._urgent: set = set()
+        self._critical: set = set()
 
-    def acquire(self, timeout: float | None = None, urgent: bool = False) -> bool:
-        """urgent=True: bu client'ta captcha var -> sıranın başına geçer (diğer acil olanların arkasına)."""
+    def acquire(self, timeout: float | None = None, urgent: bool = False, critical: bool = False) -> bool:
+        """urgent=True: bu client'ta captcha var / işaret çıktı -> sıranın başına geçer (diğer acillerin arkasına).
+        critical=True: zamanlama penceresinde basış anı geldi -> herkesin önüne geçer (milisaniyeler önemli)."""
         me = _threading.get_ident()
         with self._cv:
-            if urgent and me not in self._urgent:
+            if critical and me not in self._critical:
+                if me in self._queue:
+                    self._queue.remove(me)
+                i = 0
+                while i < len(self._queue) and self._queue[i] in self._critical:
+                    i += 1
+                self._queue.insert(i, me)
+                self._critical.add(me)
+                self._urgent.add(me)
+                self._cv.notify_all()
+            elif urgent and me not in self._urgent:
                 if me in self._queue:
                     self._queue.remove(me)
                 i = 0
@@ -620,6 +632,7 @@ class _FairLock:
                 return False          # sıradaki yerini korur, tekrar çağırınca devam eder
             self._queue.pop(0)
             self._urgent.discard(me)
+            self._critical.discard(me)
             self._owner = me
             return True
 
@@ -633,6 +646,7 @@ class _FairLock:
         me = _threading.get_ident()
         with self._cv:
             self._urgent.discard(me)
+            self._critical.discard(me)
             if me in self._queue:
                 self._queue.remove(me)
                 self._cv.notify_all()
@@ -649,3 +663,34 @@ def make_input(method: str, hwnd: int):
     if method == "postmessage":
         return PostMessageInput(hwnd)
     return HybridInput(hwnd)
+
+
+def tile_windows(hwnds: list[int]) -> int:
+    """Oyun pencerelerini (en fazla 4) bulundukları monitörde 2x2 ızgaraya diz; boyutlarına dokunmaz.
+    Pencereler üst üste binmezse her bot kendi çubuğunu ekrandan hızlıca okuyabilir. Dizilen pencere sayısı."""
+    if not IS_WINDOWS or not hwnds:
+        return 0
+    try:
+        import win32api
+        mon = win32api.MonitorFromWindow(hwnds[0], 2)
+        wl, wt, wr, wb = win32api.GetMonitorInfo(mon)["Work"]
+    except Exception:
+        return 0
+    n = min(4, len(hwnds))
+    cols = 1 if n == 1 else 2
+    rows = 1 if n <= 2 else 2
+    cw, ch = (wr - wl) // cols, (wb - wt) // rows
+    done = 0
+    for i, hw in enumerate(hwnds[:n]):
+        try:
+            l, t, r, b = win32gui.GetWindowRect(hw)
+            w, h = r - l, b - t
+            cx, cy = wl + (i % cols) * cw, wt + (i // cols) * ch
+            # pencere hücreden büyükse ekran dışına taşmasın
+            x = min(cx, wr - w) if w <= wr - wl else wl
+            y = min(cy, wb - h) if h <= wb - wt else wt
+            win32gui.SetWindowPos(hw, 0, max(wl, x), max(wt, y), 0, 0, 0x0001 | 0x0004 | 0x0010)  # NOSIZE|NOZORDER|NOACTIVATE
+            done += 1
+        except Exception:
+            pass
+    return done

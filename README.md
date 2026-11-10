@@ -151,8 +151,8 @@ eskisi gibi yerel üye dosyasıyla (`data/users.json`) çalışır.
 
 1. Botu GitHub'a yükle ve `core/server.py` içindeki `UPDATE_REPO`'ya `"kullanici/depo"` yaz.
 2. Yeni sürüm yayınlamak için bir etiket gönder: `git tag v2.1.0` ve `git push --tags`
-   (ya da GitHub → Actions → **Yayin** → Run workflow). GitHub, Windows'ta FishBot.exe'yi derler ve
-   `FishBot.zip`'i yayına ekler (`.github/workflows/yayin.yml`).
+   (ya da GitHub → Actions → **Yayin** → Run workflow). GitHub, Windows'ta tek dosya FishBot.exe'yi derler ve
+   yayına ekler (`.github/workflows/yayin.yml`).
 3. Kullanıcılar botu açınca yükleme ekranında "Bot güncelleniyor… 12.4 / 98.0 MB" görür; indirme bitince bot
    kendini günceller ve yeniden açılır. Ayarlar, üyeler ve öğrenilen resimler korunur.
 
@@ -165,19 +165,27 @@ sayısı), sayılar (görülen / otomatik / elle çözülen / çözülemeyen), t
 nereye tıklayacağını resim üzerinde gösterir), öğrenilen simgeler (yeniden adlandır / sil), yakalanan captcha
 resimleri (önizleme) ve captcha olayları.
 
-## Windows programı (.exe) yapmak
+## Windows programı (tek dosya FishBot.exe)
 
-1. Bot klasöründe **`exe_yap.bat`**'a çift tıkla. Python yoksa kendisi indirir; kütüphaneleri ve PyInstaller'ı
-   kurar, programı oluşturur (ilk seferde 5-10 dakika).
-2. Sonuç `cikti\FishBot\` klasöründe: **FishBot.exe** (bot) ve **UyeYonetimi.exe** (üye ekle / uzat / sil;
-   çift tıklayınca menü açılır). Mevcut üyeler ve ayarlar da bu klasöre taşınır.
-3. Bilgisayarda **Inno Setup 6** kuruluysa ayrıca `cikti\FishBot_Kurulum.exe` oluşur: masaüstü kısayolu,
-   Başlat menüsü ve "Programı kaldır" desteğiyle normal bir kurulum. Inno Setup yoksa `cikti\FishBot.zip` oluşur.
+Kullanıcı **sadece `FishBot.exe`** dosyasını indirir. Açınca:
+1. Yükleme ekranı: dosyalar hazırlanır, güncelleme denetlenir (varsa "Bot güncelleniyor… 12.4 / 98.0 MB"
+   indirilir ve bot kendini yeniden açar), üyelik sunucusu denetlenir.
+2. Sorun yoksa üye giriş ekranı gelir. İnternet yoksa "Tekrar dene" / "Kapat" çıkar.
 
-Program kullanıcı klasörüne kurulur (`%LOCALAPPDATA%\Programs\FishBot`), böylece ayarlarını ve öğrendiği
-resimleri kendi klasörüne yazabilir. Kendi yaptığın .exe'ler imzasız olduğu için Windows SmartScreen veya
-antivirüs ilk açılışta uyarabilir; "Ek bilgi → Yine de çalıştır" ya da klasörü antivirüs istisnasına ekle.
-Oyun yönetici olarak çalışıyorsa FishBot.exe'yi de yönetici olarak çalıştır.
+Ayarlar, kayıtlar ve öğrenilen resimler `%LOCALAPPDATA%\FishBot` klasöründe tutulur; exe nereye konursa
+konsun kaybolmaz.
+
+Exe'yi kendin yapmak için `exe_yap.bat` (sonuç `cikti\FishBot.exe`), GitHub'dan otomatik yapmak için
+aşağıdaki "Otomatik güncelleme" bölümü. Exe imzasız olduğu için SmartScreen / antivirüs ilk açılışta uyarabilir.
+Oyun yönetici olarak çalışıyorsa FishBot.exe'yi de yönetici olarak aç.
+
+## 4 client aynı anda
+
+- Bot aynı anda en fazla **4 client** çalıştırır.
+- Bütün client'lar kendi balığını aynı anda izler; sadece Space'e basılan an (birkaç on milisaniye) sırayla
+  yapılır. Basışa ~0,3 sn kala o client sırayı alır ve penceresi öne gelir, tuş bırakılınca sıra hemen
+  diğerlerine geçer. İki client tam aynı anda basacak olursa ikincisi yanlış anda basmaz, balığın dönüşünü bekler.
+- Client'lar üst üste binmesin: Client'lar sayfasındaki **⊞ Pencereleri diz** pencereleri 2x2 dizer.
 
 ## Yerel üye yönetimi (Supabase kullanılmıyorsa)
 

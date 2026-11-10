@@ -284,9 +284,10 @@ class OverviewPage(QWidget):
         head.addWidget(self.pill, 0, Qt.AlignVCenter)
         head.addStretch()
         self.btn_refresh = button("⟳  Yenile")
+        self.btn_tile = button("⊞  Pencereleri diz", tip=H.get("b_tile", ""))
         self.btn_start = button("▶  Tümünü Başlat", "primary")
         self.btn_stop = button("■  Tümünü Durdur", "danger")
-        for b in (self.btn_refresh, self.btn_start, self.btn_stop):
+        for b in (self.btn_refresh, self.btn_tile, self.btn_start, self.btn_stop):
             head.addWidget(b, 0, Qt.AlignVCenter)
         lay.addLayout(head)
 
@@ -347,6 +348,7 @@ class OverviewPage(QWidget):
         lay.addLayout(body, 1)
 
         self.btn_refresh.clicked.connect(dash.refresh)
+        self.btn_tile.clicked.connect(dash.tile)
         self.btn_start.clicked.connect(dash.start_all)
         self.btn_stop.clicked.connect(dash.win.stop_all)
 
@@ -635,9 +637,19 @@ class DashboardPage(QStackedWidget):
         if not self.games:
             self.flash_pick(T('Önce {0} ile bir client seç.').format((self.win.cfg['pick_key'])), ok=False)
             return
-        for g in self.games.values():
+        from .main_window import MAX_CLIENTS
+        games = list(self.games.values())[:MAX_CLIENTS]
+        for g in games:
             self.win.start_bot(g)
+        if len(self.games) > MAX_CLIENTS:
+            self.flash_pick(T("Bot aynı anda en fazla {n} client çalıştırır.").format(n=MAX_CLIENTS), ok=False)
         self.tick()
+
+    def tile(self) -> None:
+        from core.winapi import tile_windows
+        n = tile_windows([g.hwnd for g in list(self.games.values())[:4]])
+        self.flash_pick(T("{n} pencere ekrana dizildi. Pencereler üst üste binmezse botlar daha hızlı okur.").format(n=n)
+                        if n else T("Dizilecek client yok."), ok=bool(n))
 
     def _update_thumbs(self) -> None:
         if self.currentWidget() is not self.overview or not self.isVisible():

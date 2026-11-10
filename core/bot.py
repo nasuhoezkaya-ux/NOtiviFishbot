@@ -85,8 +85,11 @@ class BotWorker(threading.Thread):
                  on_frame: Callable[[int, object], None] | None = None,
                  want_frames: Callable[[int], bool] | None = None,
                  on_round: Callable[[int, dict], None] | None = None,
-                 on_scan: Callable[[int, str], None] | None = None):
+                 on_scan: Callable[[int, str], None] | None = None, admin: bool = False):
         super().__init__(daemon=True, name=f"bot-{game.pid}")
+        # captcha resmi kaydetme ve yeni simge / başlık öğrenme SADECE yöneticide (geliştirici). Normal üyeler
+        # yöneticinin öğrettiği ve güncellemeyle gelen resimlerle çözer, hiçbir şey kaydetmez.
+        self.admin = bool(admin)
         self.game = game
         self.cfg = cfg
         self.on_log = on_log or (lambda pid, m: None)
@@ -270,6 +273,37 @@ class BotWorker(threading.Thread):
             self._has_lock = False
             CONTROL_LOCK.release()
 
+    # ---------------------------------------------------------------- çoklu client: basış anı kilidi
+    ARM_AHEAD = 0.30          # basıştan bu kadar önce sıra alınır ve pencere öne getirilir
+    PRESSING = threading.Event()   # bir client basış anına çok yakın: diğerleri işlemciyi ona bırakır
+
+    def _arm(self) -> bool:
+        """Zamanlama basışı için kilidi BEKLEMEDEN almaya çalış (en öncelikli). Alınınca pencere öne gelir.
+        Alınamazsa sıradaki yer korunur, bir sonraki karede tekrar denenir."""
+        if self._has_lock:
+            return True
+        if CONTROL_LOCK.acquire(timeout=0.0, critical=True):
+            self._has_lock = True
+            self._armed_at = time.time()
+            BotWorker.PRESSING.set()
+            f = getattr(self.input, "focus", None)
+            if f is not None:
+                try:
+                    f()
+                except Exception:
+                    pass
+            return True
+        return False
+
+    def _disarm(self) -> None:
+        if getattr(self, "_armed_at", None) is not None and self._has_lock:
+            self._has_lock = False
+            self._armed_at = None
+            BotWorker.PRESSING.clear()
+            CONTROL_LOCK.release()
+        else:
+            CONTROL_LOCK.leave()
+
     def _key_now(self, name: str, hold: float = 0.04) -> None:
         f = getattr(self.input, "key_now", None)
         if f is not None:
@@ -348,10 +382,11 @@ class BotWorker(threading.Thread):
                 self.log(T('✓ Balık işareti öğrenildi ({0}) — sonraki turlarda resimle aranacak.').format((Path(saved).name)))
         # 3) zamanlama penceresi: balık kutucuğun ortasına gelince Space
         self.state(T("Zamanlama"))
-        with self._control(urgent=True) as ok:
-            if not ok:
-                return
+        # çoklu client: izleme sırasında kilit tutulmaz; sadece basış anına yakın kısa süre alınır (_arm)
+        try:
             res = self._play_timing(bar)
+        finally:
+            self._disarm()
         self._reset_capture_region()
         if res is None:
             return
@@ -429,6 +464,8 @@ class BotWorker(threading.Thread):
                     self._bite_miss = 0
                     return hit, None
                 rest = 1.0 / max(5, min(120, int(cfg["scan_fps"]))) - (time.time() - t0)
+                if BotWorker.PRESSING.is_set():
+                    rest = max(rest, 0.03)         # başka client basmak üzere: işaret aramayı biraz yavaşlat
                 if rest > 0 and self.sleep(rest):
                     break
         finally:
@@ -463,12 +500,7 @@ class BotWorker(threading.Thread):
         cfg = self.cfg
         ctrl = TimingController(self._lat)
         x, y, w, h = bar
-        f = getattr(self.input, "focus", None)
-        if f is not None:
-            try:
-                f()                                # basış anında odak işlemiyle vakit kaybetmemek için şimdi
-            except Exception:
-                pass
+        waited_turn = False
         if hasattr(self.capture, "set_region"):
             # çubuk + kutucuğun çubuk dışındaki lacivert çerçevesi + başlıktaki "Seri" sayacı
             top = int(1.35 * h)
@@ -516,11 +548,27 @@ class BotWorker(threading.Thread):
                     bx = ctrl.box
                     if bx is not None and rd.fish is not None and bx[0] <= rd.fish_x <= bx[1]:
                         wait = 0.0                 # çok uzadı: balık kutucuktayken bas
+                # basış yaklaşınca sırayı al ve pencereyi öne getir; balık uzaklaşırsa sırayı bırak
+                eta = ctrl.eta
+                if BotWorker.PRESSING.is_set() and not self._has_lock and (eta is None or eta > 0.5):
+                    time.sleep(0.008)              # başka client basmak üzere: ona işlemci bırak
+                if eta is not None and eta < self.ARM_AHEAD + ctrl.lat:
+                    self._arm()
+                elif self._has_lock and getattr(self, "_armed_at", None) and (eta is None or eta > 0.8):
+                    self._disarm()
+                if wait is not None and not self._arm():
+                    # başka bir client tam şu an basıyor: yanlış anda basmak yerine balığın dönüşünü bekle
+                    if not waited_turn:
+                        self.scan(T("zamanlama: başka client basıyor — bu geçiş atlandı, dönüşü beklenecek"))
+                    waited_turn = True
+                    ctrl.why = "sira bekleniyor"
+                    wait = None
                 if wait is not None:
                     if wait > 0:
                         precise_sleep(wait)
                     t_press = time.time()
                     self._key_now(cfg["cast_key"], hold=0.04)
+                    self._disarm()                 # tuş bırakıldı: sıra hemen diğer client'lara
                     press = (t_press, ctrl.predict(t_press + ctrl.lat), wait)
                     vel = ctrl.tr.velocity()
                     bx = ctrl.box
@@ -878,14 +926,16 @@ class BotWorker(threading.Thread):
                     self.log(T("✓ Captcha çözüldü, bot devam ediyor."))
                     self.scan("▶ " + T("✓ Captcha çözüldü, bot devam ediyor."), important=True)
                     self.stats.captchas += 1
-                    if "ocr" in found0.by:
+                    if "ocr" in found0.by and self.admin:
                         self.captcha.learn_title(frame0, found0)   # sonra OCR'siz de tanınsın
                     return True
                 found = f2                                          # yeni bir captcha geldi: tekrar dene
             if not found.target:
                 why = T("ne istendiği okunamadı (Windows OCR kurulu mu? Ayarlar > Captcha testi)")
-            elif not self.captcha.has_item(found.target):
+            elif not self.captcha.has_item(found.target) and self.admin:
                 why = (T('“{0}” simgesi henüz kayıtlı değil — bir kez ELLE çözersen bot o simgeyi öğrenir (ya da assets\\captcha\\esya\\{1}.png olarak ekle)').format((found.target), (found.target)))
+            elif not self.captcha.has_item(found.target):
+                why = T("“{0}” simgesi henüz eklenmedi — lütfen elle çöz; eklenince güncellemeyle gelecek").format(found.target)
             else:
                 why = T('“{0}” simgesi ekranda bulunamadı').format((found.target))
             self.log(T('Captcha otomatik çözülemedi: {0}.').format((why)))
@@ -931,7 +981,7 @@ class BotWorker(threading.Thread):
                 if last_click is not None and time.time() - last_click[2] < 3.0:
                     fc = last_click[3]
                     f_c = self.captcha.detect(fc, allow_full_ocr=False)     # tıklandığı andaki captcha
-                    if f_c is not None and f_c.target and not self.captcha.has_item(f_c.target):
+                    if self.admin and f_c is not None and f_c.target and not self.captcha.has_item(f_c.target):
                         p = self.captcha.learn_icon(fc, f_c, last_click[0], last_click[1])
                         if p:
                             self.log(T('✓ “{0}” simgesi öğrenildi ({1}) — bir dahakine bot kendisi çözer.').format((f_c.target), (Path(p).name)))
@@ -952,7 +1002,7 @@ class BotWorker(threading.Thread):
 
     def _save_captcha_shot(self, frame, tag: str) -> str:
         try:
-            if frame is None:
+            if frame is None or not self.admin:
                 return ""
             d = DATA / "captcha"
             d.mkdir(parents=True, exist_ok=True)

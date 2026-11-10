@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (QAbstractItemView, QCheckBox, QDateTimeEdit, QDia
 from core.auth import AuthError, Member
 from core.i18n import T
 
+from core.version import APP_NAME
 from . import theme
 from .dashboard import button, card_with_title, page_header
 from .widgets import StatCard
@@ -291,7 +292,7 @@ class MembersPage(QWidget):
         value, after = res
         if err:
             self.status.setText("")
-            QMessageBox.warning(self, "FishBot", err)
+            QMessageBox.warning(self, APP_NAME, err)
             return
         self.status.setText(T("✓ Güncellendi ({0}).").format(datetime.now().strftime("%H:%M:%S")))
         if after:
@@ -352,7 +353,7 @@ class MembersPage(QWidget):
     def _selected(self) -> Member | None:
         r = self.table.currentRow()
         if r < 0 or self.table.item(r, 0) is None:
-            QMessageBox.information(self, "FishBot", T("Önce listeden bir üye seç."))
+            QMessageBox.information(self, APP_NAME, T("Önce listeden bir üye seç."))
             return None
         name = self.table.item(r, 0).data(Qt.UserRole)
         return next((m for m in self.members if m.username == name), None)
@@ -428,7 +429,7 @@ class MembersPage(QWidget):
         if m is None:
             return
         if m.expires_at is None:
-            QMessageBox.information(self, "FishBot", T("Bu üye zaten süresiz."))
+            QMessageBox.information(self, APP_NAME, T("Bu üye zaten süresiz."))
             return
         m.expires_at = max(m.expires_at, datetime.now()) + timedelta(days=n)
         self._save(m, None, m.username)
@@ -465,7 +466,7 @@ class MembersPage(QWidget):
         m = self._selected()
         if m is None:
             return
-        if QMessageBox.question(self, "FishBot", T("“{0}” üyesi kalıcı olarak silinsin mi?").format(m.username)) != \
+        if QMessageBox.question(self, APP_NAME, T("“{0}” üyesi kalıcı olarak silinsin mi?").format(m.username)) != \
                 QMessageBox.StandardButton.Yes:
             return
         p, s = self.win.provider, self.win.session
