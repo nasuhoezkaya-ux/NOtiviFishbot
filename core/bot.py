@@ -85,11 +85,13 @@ class BotWorker(threading.Thread):
                  on_frame: Callable[[int, object], None] | None = None,
                  want_frames: Callable[[int], bool] | None = None,
                  on_round: Callable[[int, dict], None] | None = None,
-                 on_scan: Callable[[int, str], None] | None = None, admin: bool = False):
+                 on_scan: Callable[[int, str], None] | None = None, admin: bool = False,
+                 on_captcha_report: Callable[[dict], None] | None = None):
         super().__init__(daemon=True, name=f"bot-{game.pid}")
         # captcha resmi kaydetme ve yeni simge / başlık öğrenme SADECE yöneticide (geliştirici). Normal üyeler
         # yöneticinin öğrettiği ve güncellemeyle gelen resimlerle çözer, hiçbir şey kaydetmez.
         self.admin = bool(admin)
+        self.on_captcha_report = on_captcha_report      # üyede bilinmeyen captcha -> yöneticiye rapor
         self.game = game
         self.cfg = cfg
         self.on_log = on_log or (lambda pid, m: None)
@@ -940,18 +942,55 @@ class BotWorker(threading.Thread):
                 why = T('“{0}” simgesi ekranda bulunamadı').format((found.target))
             self.log(T('Captcha otomatik çözülemedi: {0}.').format((why)))
             self.stats.captcha_fail += 1
-        self.log(T("Captcha'yı lütfen ELLE çöz — bot bekliyor, fareyi bırakır; çözülünce kendiliğinden devam eder."))
+        unknown = not found.target or not self.captcha.has_item(found.target)
+        self.log(T("Captcha'yı lütfen HEMEN ELLE çöz (süre dolarsa oyundan atılırsın) — bot bekliyor, fareyi "
+                   "bırakır; çözülünce kendiliğinden devam eder."))
+        f = getattr(self.input, "focus", None)
+        if f is not None:
+            try:
+                f()                     # oyuncu görsün diye bu client'ın penceresi öne gelir
+            except Exception:
+                pass
         self._captcha_wait = (found, time.time(), frame)
+        self._cap_result = None
         self._captcha_wait_loop()       # (gerçek fare modunda kilit bizde: diğer client'lar imleci oynatmaz)
+        if unknown and not self.admin:
+            self._report_captcha(found, frame)
         return True
+
+    def _report_captcha(self, found, frame) -> None:
+        """Üyede tanınmayan captcha: penceresinin resmi (ve üye elle çözdüyse tıkladığı yer) yöneticiye gider.
+        Yönetici doğru yeri işaretleyip ekler; sonraki güncellemeyle bütün üyelerde otomatik çözülür."""
+        if self.on_captcha_report is None or frame is None:
+            return
+        try:
+            import base64
+            crop, x0, y0 = self.captcha.window_crop(frame, found)
+            if crop.shape[1] > 900:
+                f = 900 / crop.shape[1]
+                crop = cv2.resize(crop, None, fx=f, fy=f, interpolation=cv2.INTER_AREA)
+            else:
+                f = 1.0
+            ok, buf = cv2.imencode(".jpg", crop, [cv2.IMWRITE_JPEG_QUALITY, 88])
+            if not ok:
+                return
+            res = self._cap_result or {}
+            click = res.get("click")
+            rel = (int((click[0] - x0) * f), int((click[1] - y0) * f)) if click else None
+            self.on_captcha_report({"title": found.instruction or "", "image": base64.b64encode(buf).decode(),
+                                    "click": rel, "solved": bool(res.get("solved"))})
+            self.log(T("Bu captcha henüz bilinmiyor — resmi yöneticiye gönderildi; eklenince güncellemeyle "
+                       "otomatik çözülecek."))
+        except Exception as e:  # noqa: BLE001
+            self.scan(f"captcha raporu gönderilemedi: {e!r}")
 
     def _captcha_wait_loop(self) -> None:
         """Elle çözülmesini bekle. Kullanıcının tıkladığı yer izlenir: bilinmeyen bir simgeyse öğrenilir."""
         found, t0, frame0 = self._captcha_wait if len(self._captcha_wait) == 3 else (*self._captcha_wait, None)
         self.state(T("CAPTCHA — elle çözülmesi bekleniyor"))
-        limit = float(self.cfg["captcha_wait_min"]) * 60
+        limit = 120.0                 # oyunda captcha süresi kısa (~20 sn); dolarsa oyundan atılır
         gone = 0
-        next_beep = time.time() + 20
+        next_beep = time.time() + 3
         next_chk = time.time() + 1.0
         last_click = None          # (x, y, zaman, o anki kare) kare koordinatında
         was_down = False
@@ -978,13 +1017,13 @@ class BotWorker(threading.Thread):
             seen = self._captcha_seen()
             gone = 0 if seen else gone + 1
             if gone >= 2:
-                if last_click is not None and time.time() - last_click[2] < 3.0:
+                solved = last_click is not None and time.time() - last_click[2] < 3.0
+                self._cap_result = {"solved": solved, "click": (last_click[0], last_click[1]) if last_click else None}
+                if solved:
                     fc = last_click[3]
                     f_c = self.captcha.detect(fc, allow_full_ocr=False)     # tıklandığı andaki captcha
-                    if self.admin and f_c is not None and f_c.target and not self.captcha.has_item(f_c.target):
-                        p = self.captcha.learn_icon(fc, f_c, last_click[0], last_click[1])
-                        if p:
-                            self.log(T('✓ “{0}” simgesi öğrenildi ({1}) — bir dahakine bot kendisi çözer.').format((f_c.target), (Path(p).name)))
+                    if self.admin and f_c is not None:
+                        self._learn_from_manual(fc, f_c, last_click[0], last_click[1])
                 self.log(T("✓ Captcha kapandı, bot devam ediyor."))
                 self.stats.captcha_manual += 1
                 self.on_stats(self.game.pid, self.stats.to_dict())
@@ -992,13 +1031,56 @@ class BotWorker(threading.Thread):
                 return
             if self.cfg["captcha_sound"] and time.time() > next_beep:
                 beep("uyari")
-                next_beep = time.time() + 30
+                next_beep = time.time() + 4
             if time.time() - t0 > limit:
-                self.log(T('Captcha {0:.0f} dakikadır çözülmedi — bot durduruluyor.').format((limit / 60)))
+                self.log(T("Captcha çözülmedi ve pencere kapanmadı — oyundan atılmış olabilirsin, bot durduruluyor."))
+                self._cap_result = {"solved": False, "click": (last_click[0], last_click[1]) if last_click else None}
                 self._captcha_wait = None
                 self.stop_event.set()
                 return
         self._captcha_wait = None
+
+    def _learn_from_manual(self, frame, found, x: int, y: int) -> None:
+        """(Sadece yönetici) Captcha elle çözüldü: tıklanan simgeden yeni şekilleri öğren ve kaydet.
+        • başlık tanınmadıysa: tıklanan simge tanınıyorsa başlığın yazısı o simgenin adıyla kaydedilir
+        • simge kayıtlı değilse: tıklanan simge başlıktaki adla kaydedilir
+        • simge kayıtlı ama bu çiziminde zor tanındıysa: farklı görünüşü ek olarak kaydedilir"""
+        from dataclasses import replace
+
+        from .captcha import DISPLAY
+
+        def DISPLAY_NAME(n):  # noqa: N802
+            return DISPLAY.get(n, n)
+        cap = self.captcha
+        name, v = cap.identify_at(frame, found, x, y)
+        saved = []
+        if not found.target:
+            if name:
+                p = cap.learn_title(frame, replace(found, target=name), variant=True)
+                if p:
+                    saved.append(T("başlık “{0}” → {1}").format(DISPLAY_NAME(name), Path(p).name))
+            else:
+                # yeni bir captcha türü (ör. resimli "Balıkçının çantasına tıklayın"): başlığı ve tıklanan yeri
+                # aynı yeni adla birlikte kaydet -> aynı başlık gelince o yere tıklanır
+                nm = cap.new_name()
+                pi = cap.learn_patch(frame, found, x, y, nm)
+                pt = cap.learn_title(frame, replace(found, target=nm), variant=True) if pi else None
+                if pi and pt:
+                    saved.append(T("yeni captcha türü “{0}”: başlık {1} + tıklanan yer {2}").format(
+                        nm, Path(pt).name, Path(pi).name))
+                else:
+                    self.log(T("Captcha elle çözüldü ama kaydedilemedi — ekran görüntüsü Captcha menüsündeki "
+                               "'Yakalanan captcha'lar' listesinde."))
+        elif not cap.has_item(found.target):
+            p = cap.learn_icon(frame, found, x, y)
+            if p:
+                saved.append(T("simge “{0}” → {1}").format(DISPLAY_NAME(found.target), Path(p).name))
+        elif name is None or v < 0.85:
+            p = cap.learn_icon(frame, found, x, y, variant=True)
+            if p:
+                saved.append(T("simgenin yeni görünüşü “{0}” → {1}").format(DISPLAY_NAME(found.target), Path(p).name))
+        if saved:
+            self.log(T("✓ Captcha'dan öğrenildi ve kaydedildi: {0}").format(", ".join(saved)))
 
     def _save_captcha_shot(self, frame, tag: str) -> str:
         try:

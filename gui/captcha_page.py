@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import cv2
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QIcon, QPixmap
 from PySide6.QtWidgets import (QCheckBox, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QLabel, QListWidget,
                                QListWidgetItem, QMessageBox, QPlainTextEdit, QPushButton, QScrollArea, QSpinBox,
@@ -27,6 +27,36 @@ if TYPE_CHECKING:
     from .main_window import MainWindow
 
 SHOT_DIR = DATA / "captcha"
+
+
+class ClickImage(QLabel):
+    """Resmi sığdırarak gösterir; tıklanan noktayı resim koordinatıyla bildirir."""
+    clicked = Signal(int, int)
+
+    def __init__(self):
+        super().__init__(T("Bir rapor seç"))
+        self.setAlignment(Qt.AlignCenter)
+        self.setStyleSheet(f"background:{theme.LIVE_BG}; border-radius:10px; color:{theme.FAINT};")
+        self.setCursor(Qt.CrossCursor)
+        self._img = None
+        self._geo = None
+
+    def set_image(self, img) -> None:
+        self._img = img
+        pm = QPixmap.fromImage(bgr_to_qimage(img))
+        sc = pm.scaled(self.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        self._geo = ((self.width() - sc.width()) // 2, (self.height() - sc.height()) // 2,
+                     sc.width() / max(1, img.shape[1]))
+        self.setPixmap(sc)
+
+    def mousePressEvent(self, e):
+        if self._img is None or self._geo is None:
+            return
+        ox, oy, f = self._geo
+        p = e.position() if hasattr(e, "position") else e.pos()
+        x, y = int((p.x() - ox) / f), int((p.y() - oy) / f)
+        if 0 <= x < self._img.shape[1] and 0 <= y < self._img.shape[0]:
+            self.clicked.emit(x, y)
 
 
 def _open(path: Path) -> None:
@@ -87,15 +117,10 @@ class CaptchaPage(QScrollArea):
         form = QGridLayout()
         form.setHorizontalSpacing(14)
         form.setVerticalSpacing(10)
-        self.wait = QSpinBox()
-        self.wait.setRange(1, 120)
-        self.wait.setValue(int(cfg["captcha_wait_min"]))
-        self.wait.setSuffix(T(" dk"))
         self.keep = QSpinBox()
         self.keep.setRange(5, 1000)
         self.keep.setValue(int(cfg["captcha_keep"]))
-        for r, (lbl, w, key) in enumerate(((T("Elle çözüm için en fazla bekle"), self.wait, "captcha_wait"),
-                                           (T("Saklanacak captcha resmi"), self.keep, "captcha_keep"))):
+        for r, (lbl, w, key) in enumerate(((T("Saklanacak captcha resmi"), self.keep, "captcha_keep"),)):
             lb = QLabel(lbl)
             lb.setObjectName("kvKey")
             lb.setToolTip(H.get(key, ""))
@@ -189,6 +214,45 @@ class CaptchaPage(QScrollArea):
         hv.addLayout(brow2)
         grid.addWidget(hc, 1, 1)
 
+        # ---- üyelerden gelen bilinmeyen captcha'lar
+        self.rep_lbl = QLabel("")
+        self.rep_lbl.setObjectName("faint")
+        rc, rv = card_with_title("Üyelerden gelen captcha'lar", self.rep_lbl)
+        d2 = QLabel(T("Üyelerde bot tanımadığı bir captcha görünce resmi buraya gelir. Resimde DOĞRU yere tıkla ve "
+                      "'Çözüm olarak kaydet'e bas: bot o captcha'yı öğrenir. Sonra 'Depoya aktar…' + yeni sürüm: "
+                      "bütün üyelerde otomatik çözülür. Üye elle çözdüyse tıkladığı yer mavi daireyle görünür."))
+        d2.setObjectName("muted")
+        d2.setWordWrap(True)
+        rv.addWidget(d2)
+        rrow = QHBoxLayout()
+        self.reports = QListWidget()
+        self.reports.setMinimumWidth(220)
+        self.reports.setMaximumWidth(280)
+        self.reports.currentItemChanged.connect(self._show_report)
+        rrow.addWidget(self.reports)
+        self.rep_img = ClickImage()
+        self.rep_img.setMinimumHeight(280)
+        self.rep_img.clicked.connect(self._report_click)
+        rrow.addWidget(self.rep_img, 1)
+        rv.addLayout(rrow, 1)
+        rb = QHBoxLayout()
+        for text, fn, kind in (("Çözüm olarak kaydet", self._report_learn, "primary"),
+                               ("Üyenin tıkladığı yer doğru", self._report_use_member, ""),
+                               ("Çözüldü işaretle", lambda: self._report_done(False), "ghost"),
+                               ("Sil", lambda: self._report_done(True), "ghost"),
+                               ("Yenile", self.reload_reports, "ghost")):
+            b = button(text, kind)
+            b.clicked.connect(fn)
+            rb.addWidget(b)
+        rb.addStretch()
+        rv.addLayout(rb)
+        self.rep_status = QLabel("")
+        self.rep_status.setObjectName("faint")
+        rv.addWidget(self.rep_status)
+        grid.addWidget(rc, 2, 0, 1, 2)
+        self._reports: list[dict] = []
+        self._rep_pick = None
+
         # ---- olaylar
         ec, ev = card_with_title("Captcha olayları")
         self.events = QPlainTextEdit()
@@ -197,7 +261,7 @@ class CaptchaPage(QScrollArea):
         self.events.setMaximumBlockCount(1000)
         self.events.setMinimumHeight(150)
         ev.addWidget(self.events)
-        grid.addWidget(ec, 2, 0, 1, 2)
+        grid.addWidget(ec, 3, 0, 1, 2)
         lay.addLayout(grid)
         lay.addStretch()
 
@@ -205,6 +269,11 @@ class CaptchaPage(QScrollArea):
         self._test_frame = None
         self.reload_icons()
         self.reload_shots()
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(1500, self.reload_reports)
+        self._rep_timer = QTimer(self)
+        self._rep_timer.timeout.connect(self.reload_reports)
+        self._rep_timer.start(120_000)            # üyelerden yeni rapor gelmiş mi (2 dakikada bir)
 
     # ------------------------------------------------------------ ayarlar
     def _save(self, *_):
@@ -212,7 +281,6 @@ class CaptchaPage(QScrollArea):
         c.set("captcha_enabled", self.on.isChecked())
         c.set("captcha_autosolve", self.auto.isChecked())
         c.set("captcha_sound", self.sound.isChecked())
-        c.set("captcha_wait_min", int(self.wait.value()))
         c.set("captcha_keep", int(self.keep.value()))
         c.save()
         self.saved.setText(T("✓ Kaydedildi ({0}).").format(datetime.now().strftime("%H:%M:%S")))
@@ -352,6 +420,138 @@ class CaptchaPage(QScrollArea):
         self.shot_img.setText(T("Bir kayıt seç"))
         self.reload_shots()
 
+    # ------------------------------------------------------------ üye raporları
+    def reload_reports(self) -> None:
+        p, s = self.win.provider, self.win.session
+        self.rep_status.setText(T("Sunucuyla konuşuluyor…"))
+
+        def run():
+            try:
+                rows = p.captcha_reports(s)
+                err = ""
+            except Exception as e:  # noqa: BLE001
+                rows, err = [], str(e)
+            self._rep_rows, self._rep_err = rows, err
+            self.win.bridge.test_result.emit("\x01rep")
+        threading.Thread(target=run, daemon=True).start()
+
+    def _on_reports(self) -> None:
+        self._reports = getattr(self, "_rep_rows", [])
+        err = getattr(self, "_rep_err", "")
+        self.reports.clear()
+        for r in self._reports:
+            at = r.get("created_at")
+            when = at.strftime("%d.%m %H:%M") if at else "?"
+            mark = "✓ " if r.get("done") else ("● " if r.get("solved") else "○ ")
+            it = QListWidgetItem(f"{mark}{when}  {r.get('username') or '?'}")
+            it.setToolTip(r.get("title") or "")
+            self.reports.addItem(it)
+        new = sum(1 for r in self._reports if not r.get("done"))
+        self.rep_lbl.setText(T("{n} yeni").format(n=new))
+        self.rep_status.setText(T(err) if err else "")
+
+    def _cur_report(self):
+        i = self.reports.currentRow()
+        return (i, self._reports[i]) if 0 <= i < len(self._reports) else (None, None)
+
+    def _report_frame(self, r):
+        import base64
+        import numpy as np
+        buf = np.frombuffer(base64.b64decode(r["image"]), np.uint8)
+        return cv2.imdecode(buf, cv2.IMREAD_COLOR)
+
+    def _show_report(self, *_):
+        _i, r = self._cur_report()
+        if r is None:
+            return
+        img = self._report_frame(r)
+        if img is None:
+            return
+        self._rep_pick = None
+        self._rep_cur = img
+        self._draw_report()
+        self.rep_status.setText((r.get("title") or T("(soru okunamadı)")) +
+                                ("  ·  " + T("üye elle çözdü") if r.get("solved") else ""))
+
+    def _draw_report(self) -> None:
+        img = self._rep_cur.copy()
+        _i, r = self._cur_report()
+        if r and r.get("click_x") is not None:
+            cv2.circle(img, (int(r["click_x"]), int(r["click_y"])), 14, (255, 160, 40), 2)
+        if self._rep_pick:
+            cv2.circle(img, self._rep_pick, 16, (255, 40, 200), 3)
+            cv2.drawMarker(img, self._rep_pick, (255, 40, 200), cv2.MARKER_CROSS, 14, 2)
+        self.rep_img.set_image(img)
+
+    def _report_click(self, x: int, y: int) -> None:
+        if getattr(self, "_rep_cur", None) is None:
+            return
+        self._rep_pick = (x, y)
+        self._draw_report()
+
+    def _report_use_member(self) -> None:
+        _i, r = self._cur_report()
+        if r is None or r.get("click_x") is None:
+            self.rep_status.setText(T("Bu raporda üyenin tıkladığı bir yer yok."))
+            return
+        self._rep_pick = (int(r["click_x"]), int(r["click_y"]))
+        self._report_learn()
+
+    def _report_learn(self) -> None:
+        i, r = self._cur_report()
+        if r is None or self._rep_pick is None:
+            self.rep_status.setText(T("Önce resimde doğru yere tıkla."))
+            return
+        from dataclasses import replace
+
+        import numpy as np
+        from core.captcha import CaptchaSolver
+        img = self._rep_cur
+        # resmi büyük bir kareye yerleştir (pencere bulma ekranın kenarlarına bakmaz)
+        H, W = img.shape[:2]
+        big = np.full((H + 200, W + 200, 3), 20, np.uint8)
+        big[100:100 + H, 100:100 + W] = img
+        sol = CaptchaSolver(self.win.cfg)
+        found = sol.detect(big, allow_full_ocr=True)
+        if found is None:
+            self.rep_status.setText(T("Bu resimde captcha penceresi bulunamadı."))
+            return
+        x, y = self._rep_pick[0] + 100, self._rep_pick[1] + 100
+        if found.target:
+            name = found.target
+        else:
+            name, ok = QInputDialog.getText(self, T("Captcha adı"),
+                                            T("Bu captcha'ya kısa bir ad ver (ör. canta):"),
+                                            text=sol.new_name())
+            if not ok or not name.strip():
+                return
+            name = name.strip().lower().replace(" ", "_")
+        f2 = replace(found, target=name)
+        pi = sol.learn_patch(big, f2, x, y, name)
+        pt = sol.learn_title(big, f2, variant=True) if not found.target else None
+        if pi:
+            self.rep_status.setText(T("✓ Öğrenildi: {0}. 'Depoya aktar…' + yeni sürümle üyelere gider.").format(
+                ", ".join(Path(p).name for p in (pi, pt) if p)))
+            self._reload_solvers()
+            self.reload_icons()
+            self._report_done(False)
+        else:
+            self.rep_status.setText(T("Kaydedilemedi — başka bir noktaya tıklayıp tekrar dene."))
+
+    def _report_done(self, delete: bool) -> None:
+        i, r = self._cur_report()
+        if r is None:
+            return
+        p, s = self.win.provider, self.win.session
+
+        def run():
+            try:
+                p.captcha_report_done(s, r["id"], delete)
+            except Exception:
+                pass
+            self.reload_reports()
+        threading.Thread(target=run, daemon=True).start()
+
     # ------------------------------------------------------------ test
     def _test(self) -> None:
         pid = self.win.preview_pid
@@ -394,6 +594,9 @@ class CaptchaPage(QScrollArea):
         threading.Thread(target=run, daemon=True).start()
 
     def _on_test(self, m: str) -> None:
+        if m.startswith("\x01rep"):
+            self._on_reports()
+            return
         if not m.startswith("\x01cpg"):
             return
         self.test_lbl.setText(m[4:])

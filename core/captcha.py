@@ -46,7 +46,8 @@ TRIGGER_WORDS = ("captcha", "dogrulama", "dogrula", "robot", "bot kontrol", "guv
                  "insan misin", "anti bot", "antibot", "kalan sure")
 
 # isimlerin okunuşu (ekran yazısı -> dosya adı); dosya adları Türkçe karaktersiz yazılabilir
-DISPLAY = {"at": "At", "kilic": "Kılıç", "kitap": "Kitap", "iksir": "İksir", "balik": "Balık", "kalkan": "Kalkan"}
+DISPLAY = {"at": "At", "kilic": "Kılıç", "kitap": "Kitap", "iksir": "İksir", "balik": "Balık", "kalkan": "Kalkan",
+           "canta": "Balıkçının çantası"}
 
 
 @dataclass
@@ -104,6 +105,13 @@ def name_matches(label: str, target: str) -> bool:
         return True
     la, lb = ocr.fold(label).replace(" ", ""), ocr.fold(target).replace(" ", "")
     return len(lb) >= 4 and len(la) >= 4 and (la.startswith(lb) or lb.startswith(la))
+
+
+def _canon(img: np.ndarray, sc: float | None) -> np.ndarray:
+    """Öğrenilen resmi 1.0 ölçeğine getir (eşleştirme hep pencerenin ölçeğine göre büyütüp küçültür)."""
+    if not sc or abs(sc - 1.0) < 0.03:
+        return img
+    return cv2.resize(img, None, fx=1.0 / sc, fy=1.0 / sc, interpolation=cv2.INTER_CUBIC)
 
 
 def _file_name(p: Path) -> str:
@@ -256,9 +264,18 @@ class CaptchaSolver:
             _, v, _, loc = cv2.minMaxLoc(r)
             if best is None or v > best[0]:
                 best = (v, x0 + loc[0], y0 + loc[1], tw, th, s2)
-        if best is None or best[0] < 0.78:
+        if best is None or best[0] < 0.66:
             return None
         v, bx, by, w, h, s2 = best
+        if v < 0.78:
+            # zayıf eşleşme (ekran ölçekli / bulanık): "Kalan Süre" yazısının turuncu rengiyle doğrula
+            roi = sub[by: by + h, bx: bx + w].astype(np.int16)
+            if roi.size == 0:
+                return None
+            b_, g_, r_ = roi[..., 0], roi[..., 1], roi[..., 2]
+            orange = ((r_ > 130) & (r_ - b_ > 50) & (g_ > 70) & (g_ < r_)).mean()
+            if orange < 0.04 or orange > 0.5:
+                return None
         return v, bx, by, w, h, s2, geo
 
     def quick(self, frame: np.ndarray | None) -> bool:
@@ -305,27 +322,38 @@ class CaptchaSolver:
         strip = cv2.cvtColor(frame[max(0, y): y + h, max(0, x): x + w], cv2.COLOR_BGR2GRAY)
         if strip.size == 0:
             return None, 0.0
-        best = (None, 0.0)
+        strip = cv2.copyMakeBorder(strip, 8, 8, 8, 8, cv2.BORDER_REPLICATE)   # öğrenilen yazı kenar payı içerir
+        per: dict[str, float] = {}
         sc0 = self._last_scale or 1.0
         for name, t in self.texts:
-            for sc in sorted({1.0 if abs(sc0 - 1) < 0.02 else sc0} | {sc0 * (1 + 0.02 * k) for k in (-3, -2, -1, 1, 2, 3)}):
+            for sc in sorted({1.0 if abs(sc0 - 1) < 0.02 else sc0} |
+                             {sc0 * (1 + 0.02 * k) for k in (-5, -4, -3, -2, -1, 1, 2, 3, 4, 5)}):
                 tt = cv2.resize(t, None, fx=sc, fy=sc, interpolation=cv2.INTER_AREA) if abs(sc - 1) > 1e-3 else t
                 if tt.shape[0] > strip.shape[0] or tt.shape[1] > strip.shape[1]:
                     continue
                 r = cv2.matchTemplate(strip, tt, cv2.TM_CCOEFF_NORMED)
                 v = float(r.max())
-                if v > best[1]:
-                    best = (name, v)
-        return (best[0], best[1]) if best[1] >= 0.80 else (None, best[1])
+                if v > per.get(name, -1.0):
+                    per[name] = v
+        if not per:
+            return None, 0.0
+        ranked = sorted(per.items(), key=lambda kv: -kv[1])
+        name, v = ranked[0]
+        second = ranked[1][1] if len(ranked) > 1 else 0.0
+        # net eşleşme ya da (ölçekli/bulanık ekranda) diğer başlıklardan açıkça daha iyi
+        if v >= 0.80 or (len(ranked) >= 2 and v >= 0.62 and v - second >= 0.10):
+            return name, v
+        return None, v
 
-    def learn_title(self, frame: np.ndarray, found: CaptchaFound) -> None:
-        """OCR ile doğru çözülen captcha'nın başlığını sakla (sonra OCR'siz de tanınır)."""
+    def learn_title(self, frame: np.ndarray, found: CaptchaFound, variant: bool = False) -> str | None:
+        """Doğru çözülen captcha'nın başlık yazısını sakla (sonra OCR'siz de tanınır).
+        variant=True: o simgenin başlığı zaten kayıtlı ama bu sefer tanınmadı -> farklı yazılışı ek olarak kaydet."""
         try:
             if not found.target or found.title_box is None:
-                return
+                return None
             name = base_name(found.target)
-            if any(n == name for n, _t in self.texts):
-                return
+            if any(n == name for n, _t in self.texts) and not variant:
+                return None
             x, y, w, h = found.title_box
             g = cv2.cvtColor(frame[y: y + h, x: x + w], cv2.COLOR_BGR2GRAY)
             m = g > max(90, int(np.percentile(g, 80)))
@@ -334,10 +362,31 @@ class CaptchaSolver:
                 return
             crop = frame[max(0, y + ys.min() - 3): y + ys.max() + 4, max(0, x + xs.min() - 3): x + xs.max() + 4]
             TEXT_DIR.mkdir(parents=True, exist_ok=True)
-            cv2.imwrite(str(TEXT_DIR / f"{name}.png"), crop)
+            p = TEXT_DIR / f"{name}.png"
+            k = 2
+            while p.exists():
+                p = TEXT_DIR / f"{name}_{k}.png"
+                k += 1
+            crop = _canon(crop, self._last_scale)
+            cv2.imwrite(str(p), crop)
             self.texts.append((name, cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)))
+            return str(p)
         except Exception:
-            pass
+            return None
+
+    def identify_at(self, frame: np.ndarray, found: CaptchaFound, x: int, y: int) -> tuple[str | None, float]:
+        """Tıklanan noktadaki simge hangisi? (kayıtlı simgelerle) -> (ad, benzerlik)."""
+        best = (None, 0.0)
+        for n in self.item_names:
+            hit = self.find_click(frame, CaptchaFound(found.instruction, n, found.region, [], found.by))
+            if hit is None:
+                continue
+            m = re.findall(r"benzerlik ([\d.]+)", hit[2])
+            v = float(m[0]) if m else 0.0
+            sc = self._last_scale or 1.0
+            if abs(hit[0] - x) <= 34 * sc and abs(hit[1] - y) <= 34 * sc and v > best[1]:
+                best = (n, v)
+        return best
 
     # ------------------------------------------------------------------ algılama
     def detect(self, frame: np.ndarray | None, allow_full_ocr: bool = True) -> CaptchaFound | None:
@@ -461,11 +510,12 @@ class CaptchaSolver:
         v, (x, y), w, h, n = best
         return rx + x + w // 2, ry + y + h // 2, f"simge “{DISPLAY.get(n, n)}” (benzerlik {v:.2f})"
 
-    def learn_icon(self, frame: np.ndarray, found: CaptchaFound, x: int, y: int) -> str | None:
+    def learn_icon(self, frame: np.ndarray, found: CaptchaFound, x: int, y: int, variant: bool = False) -> str | None:
         """Kullanıcı bilinmeyen bir simgeyi elle tıklayıp captcha'yı çözdüyse o simgeyi öğren.
+        variant=True: simge kayıtlı ama bu çiziminde tanınmadı -> farklı görünüşü ek olarak kaydet.
         (x, y): tıklanan nokta (kare koordinatı). Kaydedilen dosya yolunu döner."""
         try:
-            if not found.target or self.has_item(found.target):
+            if not found.target or (self.has_item(found.target) and not variant):
                 return None
             rx, ry, rw, rh = found.region
             if not (rx <= x <= rx + rw and ry <= y <= ry + rh):
@@ -480,7 +530,7 @@ class CaptchaSolver:
             m = cv2.dilate(m, np.ones((11, 11), np.uint8))
             n, lab, st, cen = cv2.connectedComponentsWithStats(m)
             if n <= 1:
-                return None
+                return self.learn_patch(frame, found, x, y, base_name(found.target))
             px, py = x - x0, y - y0
             best = None
             for i in range(1, n):
@@ -492,12 +542,16 @@ class CaptchaSolver:
                 if best is None or d < best[0]:
                     best = (d, i)
             if best is None or best[0] > 30 * sc:
-                return None
+                return self.learn_patch(frame, found, x, y, base_name(found.target))
             i = best[1]
             bx, by, bw, bh, _a = st[i]
+            if bw * bh > 0.7 * sq.shape[0] * sq.shape[1]:
+                # tek bir simge değil, resmin bir parçası (ör. "balıkçının çantası"): tıklanan yerin parçası
+                return self.learn_patch(frame, found, x, y, base_name(found.target))
             mask = (lab == i).astype(np.uint8) * 255
             crop = sq[by: by + bh, bx: bx + bw]
-            rgba = np.dstack([crop, mask[by: by + bh, bx: bx + bw]])
+            rgba = _canon(np.dstack([crop, mask[by: by + bh, bx: bx + bw]]), self._last_scale)
+            crop = rgba[:, :, :3]
             name = base_name(found.target)
             ITEM_DIR.mkdir(parents=True, exist_ok=True)
             p = ITEM_DIR / f"{name}.png"
@@ -506,10 +560,57 @@ class CaptchaSolver:
                 p = ITEM_DIR / f"{name}_{k}.png"
                 k += 1
             cv2.imwrite(str(p), rgba)
-            self.items.append((name, crop.copy(), mask[by: by + bh, bx: bx + bw].copy()))
+            self.items.append((name, crop.copy(), (rgba[:, :, 3] > 40).astype(np.uint8) * 255))
             return str(p)
         except Exception:
             return None
+
+    def new_name(self) -> str:
+        """Adı bilinmeyen yeni hedef için ad: hedefc, hedeff, hedefj… (sonuna Türkçe ek sanılmayacak harf)."""
+        used = {n for n, _i, _m in self.items} | {n for n, _t in self.texts}
+        letters = "cfjlmnrsvyz"
+        for k in range(1, 4):
+            for i in range(len(letters) ** k):
+                suf, j = "", i
+                for _ in range(k):
+                    suf = letters[j % len(letters)] + suf
+                    j //= len(letters)
+                if "hedef" + suf not in used:
+                    return "hedef" + suf
+        return "hedefzzz"
+
+    def learn_patch(self, frame: np.ndarray, found: CaptchaFound, x: int, y: int, name: str) -> str | None:
+        """Resimli captcha'lar için ("Balıkçının çantasına tıklayın"): tıklanan noktanın etrafındaki parçayı
+        (maskesiz) kaydet. Sonra aynı resim gelince o parça bulunup ortasına tıklanır."""
+        try:
+            rx, ry, rw, rh = found.region
+            sc = self._last_scale or 1.0
+            half = int(round(30 * sc))
+            x0, y0 = max(rx, x - half), max(ry, y - half)
+            x1, y1 = min(rx + rw, x + half), min(ry + rh, y + half)
+            if x1 - x0 < 16 or y1 - y0 < 16:
+                return None
+            crop = _canon(frame[y0:y1, x0:x1].copy(), self._last_scale)
+            ITEM_DIR.mkdir(parents=True, exist_ok=True)
+            p = ITEM_DIR / f"{name}.png"
+            k = 2
+            while p.exists():
+                p = ITEM_DIR / f"{name}_{k}.png"
+                k += 1
+            cv2.imwrite(str(p), crop)
+            self.items.append((name, crop, None))
+            return str(p)
+        except Exception:
+            return None
+
+    @staticmethod
+    def window_crop(frame: np.ndarray, found: CaptchaFound, pad: int = 40) -> tuple[np.ndarray, int, int]:
+        """Captcha penceresi + kenar boşluğu (yöneticiye rapor için). (resim, sol, üst)"""
+        H, W = frame.shape[:2]
+        x, y, w, h = found.window_box or found.region
+        x0, y0 = max(0, x - pad), max(0, y - pad)
+        x1, y1 = min(W, x + w + pad), min(H, y + h + pad)
+        return frame[y0:y1, x0:x1].copy(), x0, y0
 
     def score_all(self, frame: np.ndarray, found: CaptchaFound) -> list[tuple[str, float, int, int]]:
         """Test için: her kayıtlı simgenin ızgaradaki en iyi eşleşmesi."""

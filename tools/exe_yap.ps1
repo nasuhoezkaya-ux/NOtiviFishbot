@@ -49,10 +49,10 @@ $extra = @("--add-data", "$Root\assets;assets")
 if ($LASTEXITCODE -eq 0) { $extra += @("--collect-all", "winrt") }
 
 Step "FishBot.exe olusturuluyor (birkac dakika)"
-& $Py -m PyInstaller @common @extra --onefile --windowed --name FishBot --splash "$Root\assets\splash.png" --paths $Root "$Root\main.py"
+& $Py -m PyInstaller @common @extra --onefile --windowed --uac-admin --name FishBot --splash "$Root\assets\splash.png" --paths $Root "$Root\main.py"
 if ($LASTEXITCODE -ne 0) {
     Write-Host "[!] Acilis resmiyle olmadi, resimsiz deneniyor..."
-    & $Py -m PyInstaller @common @extra --onefile --windowed --name FishBot --paths $Root "$Root\main.py"
+    & $Py -m PyInstaller @common @extra --onefile --windowed --uac-admin --name FishBot --paths $Root "$Root\main.py"
     if ($LASTEXITCODE -ne 0) { throw "FishBot.exe olusturulamadi." }
 }
 Copy-Item "$Build\dist\FishBot.exe" "$Out\FishBot.exe" -Force -ErrorAction Stop

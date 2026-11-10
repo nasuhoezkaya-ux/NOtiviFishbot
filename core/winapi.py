@@ -194,6 +194,17 @@ def client_info(hwnd: int) -> dict | None:
         return None
 
 
+def is_admin() -> bool:
+    """Program yönetici olarak mı çalışıyor? (oyun yönetici ise bot da öyle olmalı; yoksa Windows
+    F7/F8 tuşlarını okumaya ve oyuna tuş göndermeye izin vermez)"""
+    if not IS_WINDOWS:
+        return True
+    try:
+        return bool(ctypes.windll.shell32.IsUserAnAdmin())
+    except Exception:
+        return True
+
+
 def key_down(name: str) -> bool:
     """Tuş şu an basılı mı (oyun ön plandayken de çalışır)."""
     if not IS_WINDOWS:

@@ -110,6 +110,58 @@ class AuthProvider:
     def kick(self, session: Session, username: str) -> None:
         """Üyenin açık oturumlarını kapat: botu birkaç dakika içinde durur, yeniden giriş yapması gerekir."""
 
+    # --- captcha raporları (üyede bilinmeyen captcha -> yöneticiye)
+    def report_captcha(self, session: Session, title: str, image_b64: str, click: tuple | None,
+                       solved: bool) -> None:
+        """Yerel üyelikte rapor programın kendi klasörüne yazılır."""
+        import base64
+        import time as _t
+        d = os.path.join(DATA_DIR, "captcha_rapor")
+        os.makedirs(d, exist_ok=True)
+        stamp = _t.strftime("%Y%m%d_%H%M%S")
+        with open(os.path.join(d, f"{stamp}.jpg"), "wb") as f:
+            f.write(base64.b64decode(image_b64))
+        with open(os.path.join(d, f"{stamp}.json"), "w", encoding="utf-8") as f:
+            json.dump({"username": session.username, "title": title, "click": click, "solved": solved,
+                       "created_at": datetime.now().isoformat(timespec="seconds")}, f, ensure_ascii=False)
+
+    def captcha_reports(self, session: Session) -> list[dict]:
+        import base64
+        d = os.path.join(DATA_DIR, "captcha_rapor")
+        out = []
+        if not os.path.isdir(d):
+            return out
+        for fn in sorted(os.listdir(d), reverse=True):
+            if not fn.endswith(".json"):
+                continue
+            try:
+                meta = json.load(open(os.path.join(d, fn), encoding="utf-8"))
+                img = base64.b64encode(open(os.path.join(d, fn[:-5] + ".jpg"), "rb").read()).decode()
+            except Exception:
+                continue
+            c = meta.get("click") or [None, None]
+            out.append({"id": fn[:-5], "username": meta.get("username"), "title": meta.get("title", ""),
+                        "image": img, "click_x": c[0], "click_y": c[1], "solved": meta.get("solved", False),
+                        "done": meta.get("done", False), "created_at": _dt(meta.get("created_at"))})
+        return out
+
+    def captcha_report_done(self, session: Session, rid, delete: bool) -> None:
+        d = os.path.join(DATA_DIR, "captcha_rapor")
+        if delete:
+            for ext in (".json", ".jpg"):
+                try:
+                    os.remove(os.path.join(d, f"{rid}{ext}"))
+                except OSError:
+                    pass
+        else:
+            p = os.path.join(d, f"{rid}.json")
+            try:
+                meta = json.load(open(p, encoding="utf-8"))
+                meta["done"] = True
+                json.dump(meta, open(p, "w", encoding="utf-8"), ensure_ascii=False)
+            except Exception:
+                pass
+
     def logout(self, session: Session) -> None:
         pass
 
@@ -427,6 +479,21 @@ class SupabaseAuthProvider(AuthProvider):
 
     def kick(self, session: Session, username: str) -> None:
         self._rpc("fb_admin_kick", {"p_token": session.token, "p_username": username})
+
+    def report_captcha(self, session: Session, title: str, image_b64: str, click: tuple | None,
+                       solved: bool) -> None:
+        self._rpc("fb_captcha_report", {"p_token": session.token, "p_title": title, "p_image": image_b64,
+                                        "p_click_x": click[0] if click else None,
+                                        "p_click_y": click[1] if click else None, "p_solved": bool(solved)})
+
+    def captcha_reports(self, session: Session) -> list[dict]:
+        rows = self._rpc("fb_admin_captcha_list", {"p_token": session.token, "p_limit": 80}) or []
+        for r in rows:
+            r["created_at"] = _dt(r.get("created_at"))
+        return rows
+
+    def captcha_report_done(self, session: Session, rid, delete: bool) -> None:
+        self._rpc("fb_admin_captcha_done", {"p_token": session.token, "p_id": int(rid), "p_delete": bool(delete)})
 
     def logout(self, session: Session) -> None:
         try:

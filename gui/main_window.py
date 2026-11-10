@@ -625,6 +625,16 @@ class MainWindow(QMainWindow):
         self.log_line(0, T('Hoş geldin {0}. Üyelik bitişi: {1}').format(
             session.username, T("Süresiz") if session.expires_at is None else f"{session.expires_at:%d.%m.%Y %H:%M}"))
         self.dashboard.refresh()
+        from core.winapi import is_admin
+        if not is_admin():
+            QTimer.singleShot(800, self._warn_not_admin)
+
+    def _warn_not_admin(self) -> None:
+        msg = T("Bot yönetici olarak çalışmıyor. Oyun yönetici olarak açıksa Windows izin vermez: {0} ile client "
+                "seçilmez ve tuşlar oyuna gitmez. Botu kapatıp sağ tık → 'Yönetici olarak çalıştır' ile aç.").format(
+            self.cfg["pick_key"])
+        self.log_line(0, "⚠ " + msg)
+        QMessageBox.warning(self, APP_NAME, msg)
 
     def go(self, i: int, from_nav: bool = False) -> None:
         if i == 0 and from_nav and self.stack.currentIndex() == 0:
@@ -790,7 +800,8 @@ class MainWindow(QMainWindow):
                       want_frames=lambda pid: pid == self.preview_pid,
                       on_round=self.bridge.round.emit,
                       on_scan=self.bridge.scan.emit,
-                      admin=self.session.is_admin)
+                      admin=self.session.is_admin,
+                      on_captcha_report=self._send_captcha_report)
         self.workers[game.pid] = w
         w.start()
         self.dashboard.set_state(game.pid, "Çalışıyor")
@@ -804,6 +815,18 @@ class MainWindow(QMainWindow):
         for w in self.workers.values():
             w.stop()
         self.dashboard.tick()
+
+    def _send_captcha_report(self, rep: dict) -> None:
+        """(bot iş parçacığından) tanınmayan captcha'yı yöneticiye gönder."""
+        import threading
+
+        def run():
+            try:
+                self.provider.report_captcha(self.session, rep.get("title", ""), rep["image"], rep.get("click"),
+                                             rep.get("solved", False))
+            except Exception as e:  # noqa: BLE001
+                self.bridge.log.emit(0, T("Captcha raporu gönderilemedi: {0}").format(e))
+        threading.Thread(target=run, daemon=True).start()
 
     def ask_restart_for_language(self) -> None:
         """Dil değişti: arayüzün tamamı yeni dilde olsun diye program yeniden açılır."""
